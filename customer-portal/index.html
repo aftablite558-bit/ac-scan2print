@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <title>AC Scan2Print — Smart QR Print | AMAN COMPUTER</title>
+    <meta
+      name="description"
+      content="AC Scan2Print Smart QR Print Customer Portal by AMAN COMPUTER. Scan, upload PDF/images, choose print options, pay securely, and track your print job."
+    />
+    <meta property="og:title" content="AC Scan2Print — Smart QR Print" />
+    <meta
+      property="og:description"
+      content="Mobile-first QR document printing and job tracking for AMAN COMPUTER."
+    />
+    <meta property="og:type" content="website" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Urbanist:wght@400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <script>
+      (function (d) {
+        try {
+          var t = localStorage.getItem('ac-scan2print-customer-theme') || 'light';
+          d.dataset.theme =
+            t === 'system'
+              ? window.matchMedia('(prefers-color-scheme: dark)').matches
+                ? 'dark'
+                : 'light'
+              : t;
+        } catch (e) {
+          d.dataset.theme = 'light';
+        }
+      })(document.documentElement);
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

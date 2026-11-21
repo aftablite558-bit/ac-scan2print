@@ -1,0 +1,97 @@
+# AC Scan2Print — Supabase Project Configuration
+# Note: Populate environment variables (.env / Supabase Dashboard Secrets) before deploying.
+# Do not commit real keys or project secrets to version control.
+
+project_id = "ac-scan2print"
+
+[api]
+enabled = true
+port = 54321
+schemas = ["public", "storage"]
+extra_search_path = ["public"]
+max_rows = 200
+
+[db]
+port = 54322
+major_version = 15
+
+[studio]
+enabled = true
+port = 54323
+
+[storage]
+enabled = true
+file_size_limit = "20MiB"
+
+[auth]
+enabled = true
+enable_signup = false
+enable_anonymous_sign_ins = false
+minimum_password_length = 10
+
+[auth.email]
+enable_signup = false
+double_confirm_changes = true
+enable_confirmations = true
+
+# Edge Function JWT verification settings:
+# - Supabase Gateway verify_jwt strictly validates Supabase Auth JWTs and rejects Firebase RS256 ID tokens.
+# - Therefore, Admin endpoints MUST set verify_jwt = false at the gateway and enforce fail-closed
+#   Firebase RS256 ID Token verification (Google JWKS + FIREBASE_PROJECT_ID) AND single-admin
+#   membership in public.print_admin_accounts (firebase_uid + is_active = TRUE) inside every handler.
+# - agent-enroll uses the exact same Admin Firebase RS256 authentication mechanism as all other Admin endpoints.
+# - Customer endpoints validate SHA-256 tracking_token / draft_secret or IP rate limits; Agent runtime endpoints validate SHA-256 device credentials.
+
+[functions.create-print-job]
+verify_jwt = false
+
+[functions.create-print-upload-url]
+verify_jwt = false
+
+[functions.finalize-print-upload]
+verify_jwt = false
+
+[functions.get-print-job-status]
+verify_jwt = false
+
+[functions.get-public-payment-settings]
+verify_jwt = false
+
+[functions.submit-upi-payment]
+verify_jwt = false
+
+[functions.admin-bootstrap]
+verify_jwt = false
+
+[functions.admin-review-print-job]
+verify_jwt = false
+
+[functions.admin-verify-payment]
+verify_jwt = false
+
+[functions.admin-confirm-cash]
+verify_jwt = false
+
+[functions.admin-update-payment-settings]
+verify_jwt = false
+
+[functions.admin-release-print-job]
+verify_jwt = false
+
+[functions.admin-retry-print-job]
+verify_jwt = false
+
+[functions.cleanup-expired-print-files]
+verify_jwt = false
+
+[functions.agent-enroll]
+verify_jwt = false
+
+[functions.agent-heartbeat]
+verify_jwt = false
+
+[functions.agent-claim-job]
+verify_jwt = false
+
+[functions.agent-report-job-event]
+verify_jwt = false

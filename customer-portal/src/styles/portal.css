@@ -1,0 +1,191 @@
+@import "tailwindcss";
+
+:root {
+  --font: "Urbanist", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 22px;
+  --r-xl: 28px;
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+
+  /* Official AC Scan2Print Brand Tokens */
+  --ac-obsidian: #111318;
+  --ac-cyan: #25c7d9;
+  --ac-cyan-hi: #35d5e7;
+  --ac-cyan-ink: #072227;
+  --ac-cyan-soft: rgba(37, 199, 217, 0.14);
+  --ac-cyan-border: rgba(37, 199, 217, 0.36);
+  --ac-white: #ffffff;
+
+  /* Spatial Enterprise Surface Hierarchy (Light) */
+  --color-canvas: #eef1f5;
+  --color-surface: #ffffff;
+  --color-surface-elevated: rgba(255, 255, 255, 0.88);
+  --color-surface-subtle: #f5f7fa;
+  --color-text-primary: #111318;
+  --color-text-secondary: #3b404c;
+  --color-text-muted: #5a6070;
+  --color-border: rgba(17, 19, 24, 0.1);
+  --color-border-strong: rgba(17, 19, 24, 0.18);
+  --color-rim: rgba(255, 255, 255, 0.9);
+  --color-accent: #1496a6;
+  --color-accent-bg: var(--ac-cyan);
+  --color-accent-ink: #062126;
+
+  /* Semantic Status Tokens (Aligned with Repository src/index.css) */
+  --good: #126b45;
+  --warn: #855400;
+  --bad: #b3261e;
+  --info: #1c5a9e;
+  --good-soft: rgba(18, 140, 90, 0.13);
+  --warn-soft: rgba(214, 150, 20, 0.17);
+  --bad-soft: rgba(200, 50, 40, 0.12);
+  --info-soft: rgba(30, 110, 200, 0.12);
+
+  --shadow-card: 0 1px 2px rgba(17, 19, 24, 0.05), 0 14px 32px -22px rgba(17, 19, 24, 0.22);
+  --shadow-elevated: 0 2px 6px rgba(17, 19, 24, 0.06), 0 24px 48px -26px rgba(17, 19, 24, 0.26);
+
+  color-scheme: light;
+}
+
+[data-theme="dark"] {
+  --color-canvas: #111318;
+  --color-surface: #181b22;
+  --color-surface-elevated: rgba(24, 27, 34, 0.86);
+  --color-surface-subtle: #20242e;
+  --color-text-primary: #f5f7fa;
+  --color-text-secondary: #d4d8e1;
+  --color-text-muted: #9ea6b7;
+  --color-border: rgba(255, 255, 255, 0.11);
+  --color-border-strong: rgba(255, 255, 255, 0.2);
+  --color-rim: rgba(255, 255, 255, 0.08);
+  --color-accent: #25c7d9;
+  --color-accent-bg: #25c7d9;
+  --color-accent-ink: #072227;
+
+  --good: #74dca8;
+  --warn: #f2c26b;
+  --bad: #ff978c;
+  --info: #8cc7ff;
+  --good-soft: rgba(116, 220, 168, 0.14);
+  --warn-soft: rgba(242, 194, 107, 0.16);
+  --bad-soft: rgba(255, 151, 140, 0.15);
+  --info-soft: rgba(140, 199, 255, 0.15);
+
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 16px 36px -22px rgba(0, 0, 0, 0.65);
+  --shadow-elevated: 0 2px 6px rgba(0, 0, 0, 0.4), 0 28px 54px -26px rgba(0, 0, 0, 0.78);
+
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  font-family: var(--font);
+  background: var(--color-canvas);
+  color: var(--color-text-primary);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 14px;
+  line-height: 1.5;
+  overflow-x: hidden;
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Spatial Enterprise Surfaces (Spec §3.1 - §3.3) */
+.portal-topbar {
+  background: var(--color-surface-elevated);
+  backdrop-filter: blur(18px) saturate(1.25);
+  -webkit-backdrop-filter: blur(18px) saturate(1.25);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.portal-card {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-lg);
+  box-shadow: inset 0 1px 0 var(--color-rim), var(--shadow-card);
+}
+
+.portal-card-subtle {
+  background: var(--color-surface-subtle);
+  border: 1px solid var(--color-border);
+  border-radius: var(--r-md);
+}
+
+.portal-btn-primary {
+  background: var(--color-accent-bg);
+  color: var(--color-accent-ink);
+  font-weight: 700;
+  min-height: 44px;
+  border-radius: var(--r-md);
+  transition: background-color 160ms var(--ease), transform 140ms var(--ease);
+}
+
+.portal-btn-primary:hover:not(:disabled) {
+  background: var(--ac-cyan-hi);
+}
+
+.portal-btn-primary:active:not(:disabled) {
+  transform: scale(0.99);
+}
+
+.portal-btn-primary:disabled {
+  opacity: 0.52;
+  cursor: not-allowed;
+}
+
+.portal-btn-secondary {
+  background: var(--color-surface-subtle);
+  color: var(--color-text-primary);
+  border: 1px solid var(--color-border-strong);
+  font-weight: 600;
+  min-height: 44px;
+  border-radius: var(--r-md);
+  transition: background-color 160ms var(--ease), border-color 160ms var(--ease);
+}
+
+.portal-btn-secondary:hover:not(:disabled) {
+  background: var(--ac-cyan-soft);
+  border-color: var(--ac-cyan-border);
+}
+
+.portal-input {
+  background: var(--color-surface);
+  border: 1px solid var(--color-border-strong);
+  color: var(--color-text-primary);
+  border-radius: var(--r-sm);
+  min-height: 44px;
+  transition: border-color 150ms var(--ease), box-shadow 150ms var(--ease);
+}
+
+.portal-input:focus {
+  outline: none;
+  border-color: var(--ac-cyan);
+  box-shadow: 0 0 0 3px var(--ac-cyan-soft);
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--ac-cyan);
+  outline-offset: 2px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

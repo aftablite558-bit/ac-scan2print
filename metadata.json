@@ -1,0 +1,6 @@
+{
+  "name": "AMAN COMPUTER — Admin Dashboard",
+  "description": "Admin Dashboard foundation for AMAN COMPUTER printing services with light and dark glassmorphism themes, smooth GSAP animations, business profile, team access, alerts, and help.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
