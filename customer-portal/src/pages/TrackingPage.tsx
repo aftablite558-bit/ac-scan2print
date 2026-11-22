@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useId, useState } from 'react';
 import {
   AlertTriangle,
+  Banknote,
   Check,
   Clock,
   FileText,
+  QrCode,
   RefreshCw,
   Search,
   ShieldAlert,
@@ -16,11 +18,11 @@ import {
   formatInr,
   getCustomerSafeStatusMeta,
 } from '../lib/pricing';
-import { formatFileSize } from '../lib/validation';
-import type { CustomerJobStatusResponse } from '../types/portal';
+import { formatFileSize, validateUtrInput } from '../lib/validation';
+import type { CustomerJobStatusResponse, PaymentMethod } from '../types/portal';
 
 export const TrackingPage: React.FC = () => {
-  const { adapter, searchParams, recentSessionJobs, navigate } = usePortal();
+  const { adapter, paymentSettings, searchParams, recentSessionJobs, navigate } = usePortal();
   const initialUrlToken = searchParams.get('token')?.trim() || '';
 
   const [tokenInput, setTokenInput] = useState(initialUrlToken);
@@ -29,7 +31,14 @@ export const TrackingPage: React.FC = () => {
   const [loading, setLoading] = useState(Boolean(initialUrlToken));
   const [error, setError] = useState<string | null>(null);
 
+  const [retryPayMethod, setRetryPayMethod] = useState<PaymentMethod>('upi');
+  const [retryUtr, setRetryUtr] = useState('');
+  const [retryPayBusy, setRetryPayBusy] = useState(false);
+  const [retryPayError, setRetryPayError] = useState<string | null>(null);
+  const [retryPaySuccess, setRetryPaySuccess] = useState<string | null>(null);
+
   const tokenFieldId = useId();
+  const retryUtrId = useId();
 
   const fetchStatus = useCallback(
     async (token: string) => {
@@ -60,13 +69,66 @@ export const TrackingPage: React.FC = () => {
   useEffect(() => {
     if (initialUrlToken) {
       setTokenInput(initialUrlToken);
+      // Scrub ?token= from visible browser URL bar immediately so token does not linger in history/Referer
+      if (typeof window !== 'undefined' && window.location.search.includes('token=')) {
+        window.history.replaceState(null, '', '/quick-print/track');
+      }
       void fetchStatus(initialUrlToken);
     }
   }, [initialUrlToken, fetchStatus]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    setRetryPaySuccess(null);
+    setRetryPayError(null);
     void fetchStatus(tokenInput);
+  };
+
+  const canResubmitPayment = Boolean(
+    jobData &&
+      ['submitted', 'under_review', 'awaiting_payment'].includes(jobData.status) &&
+      jobData.paymentStatus === 'unpaid' &&
+      jobData.finalAmount !== null
+  );
+  const upiAvailable = Boolean(paymentSettings?.upiEnabled && paymentSettings.upiId);
+
+  const handleRetryPaymentSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeToken || !jobData) return;
+    setRetryPayError(null);
+    setRetryPaySuccess(null);
+
+    const method: PaymentMethod = retryPayMethod === 'upi' && upiAvailable ? 'upi' : 'cash';
+    let normalizedUtr: string | undefined;
+    if (method === 'upi') {
+      const utrCheck = validateUtrInput(retryUtr);
+      if (!utrCheck.valid) {
+        setRetryPayError(utrCheck.error || 'Enter a valid UPI Transaction Reference (UTR).');
+        return;
+      }
+      normalizedUtr = utrCheck.normalized;
+    }
+
+    setRetryPayBusy(true);
+    try {
+      await adapter.submitPayment({
+        trackingToken: activeToken,
+        paymentMethod: method,
+        transactionReference: normalizedUtr,
+        idempotencyKey: `track-pay-${crypto.randomUUID()}`,
+      });
+      setRetryUtr('');
+      setRetryPaySuccess(
+        method === 'upi'
+          ? 'UPI reference submitted for staff verification.'
+          : 'Counter cash payment selected. Pay at Aman Computer counter.'
+      );
+      await fetchStatus(activeToken);
+    } catch (err) {
+      setRetryPayError(err instanceof Error ? err.message : 'Unable to submit payment update.');
+    } finally {
+      setRetryPayBusy(false);
+    }
   };
 
   const statusMeta = jobData
@@ -163,10 +225,10 @@ export const TrackingPage: React.FC = () => {
         </section>
       )}
 
-      {/* Loaded Job Tracking Details (Customer-Safe Only — Zero Document Download Links) */}
+      {/* Loaded Job Tracking Details (Customer-Safe Only — Zero Document Download Links or Internal IDs) */}
       {!loading && jobData && statusMeta && (
         <section className="portal-card p-5 sm:p-6 space-y-5">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+          <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-2">
                 <h2 className="text-[20px] font-bold tabular-nums">{jobData.jobNumber}</h2>
@@ -175,6 +237,11 @@ export const TrackingPage: React.FC = () => {
               <p className="text-[13.5px] text-[var(--color-text-secondary)] m-0">
                 {statusMeta.description}
               </p>
+              {jobData.submittedAt && (
+                <p className="text-[12px] text-[var(--color-text-muted)] tabular-nums m-0">
+                  Submitted on {new Date(jobData.submittedAt).toLocaleString()}
+                </p>
+              )}
             </div>
 
             <button
@@ -193,6 +260,16 @@ export const TrackingPage: React.FC = () => {
               <div>
                 <strong>Counter Note: </strong>
                 {jobData.rejectionReason}
+              </div>
+            </div>
+          )}
+
+          {jobData.payment?.rejectionReason && jobData.paymentStatus === 'unpaid' && (
+            <div className="rounded-[12px] bg-[var(--warn-soft)] border border-[var(--warn)]/30 p-3.5 text-[13px] text-[var(--warn)] flex items-start gap-2">
+              <AlertTriangle size={17} className="shrink-0 mt-0.5" />
+              <div>
+                <strong>Payment Verification Note: </strong>
+                {jobData.payment.rejectionReason}
               </div>
             </div>
           )}
@@ -257,7 +334,7 @@ export const TrackingPage: React.FC = () => {
             </div>
             <div className="flex justify-between gap-2">
               <span className="text-[var(--color-text-muted)]">Preferences</span>
-              <span className="font-semibold">
+              <span className="font-semibold text-right">
                 {jobData.paperSize} · {jobData.printMode === 'bw' ? 'B&W' : 'Colour'} ·{' '}
                 {jobData.printSides === 'duplex' ? 'Double-sided' : 'Single-sided'} ·{' '}
                 {jobData.copies} {jobData.copies === 1 ? 'copy' : 'copies'}
@@ -280,6 +357,82 @@ export const TrackingPage: React.FC = () => {
               ))}
             </div>
           </div>
+
+          {/* Retry / Submit Payment on Unpaid Active Job */}
+          {canResubmitPayment && (
+            <form
+              onSubmit={handleRetryPaymentSubmit}
+              className="portal-card-subtle p-4 space-y-3 border border-[var(--ac-cyan-border)]"
+            >
+              <div className="text-[13.5px] font-bold">Complete or Update Payment Reference</div>
+              <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Payment method">
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={retryPayMethod === 'upi' && upiAvailable}
+                  disabled={!upiAvailable}
+                  onClick={() => setRetryPayMethod('upi')}
+                  className={`min-h-[42px] px-3 py-2 rounded-[10px] border text-[12.5px] font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-45 ${
+                    retryPayMethod === 'upi' && upiAvailable
+                      ? 'bg-[var(--ac-cyan-soft)] border-[var(--ac-cyan)]'
+                      : 'bg-[var(--color-surface)] border-[var(--color-border)]'
+                  }`}
+                >
+                  <QrCode size={14} />
+                  <span>Submit UPI UTR</span>
+                </button>
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={retryPayMethod === 'cash' || !upiAvailable}
+                  onClick={() => setRetryPayMethod('cash')}
+                  className={`min-h-[42px] px-3 py-2 rounded-[10px] border text-[12.5px] font-bold inline-flex items-center justify-center gap-1.5 cursor-pointer ${
+                    retryPayMethod === 'cash' || !upiAvailable
+                      ? 'bg-[var(--ac-cyan-soft)] border-[var(--ac-cyan)]'
+                      : 'bg-[var(--color-surface)] border-[var(--color-border)]'
+                  }`}
+                >
+                  <Banknote size={14} />
+                  <span>Pay Counter Cash</span>
+                </button>
+              </div>
+
+              {retryPayMethod === 'upi' && upiAvailable && (
+                <div>
+                  <label htmlFor={retryUtrId} className="block text-[12px] font-bold mb-1">
+                    UPI UTR / Transaction Reference
+                  </label>
+                  <input
+                    id={retryUtrId}
+                    type="text"
+                    value={retryUtr}
+                    onChange={(e) => setRetryUtr(e.target.value)}
+                    placeholder="Enter 12-digit UTR"
+                    className="portal-input w-full px-3 text-[13.5px] tabular-nums"
+                  />
+                </div>
+              )}
+
+              {retryPayError && (
+                <p className="text-[12px] font-semibold text-[var(--bad)] m-0">{retryPayError}</p>
+              )}
+              {retryPaySuccess && (
+                <p className="text-[12px] font-semibold text-[var(--good)] m-0">{retryPaySuccess}</p>
+              )}
+
+              <button
+                type="submit"
+                disabled={retryPayBusy}
+                className="portal-btn-primary px-4 py-2 text-[13px] cursor-pointer"
+              >
+                {retryPayBusy
+                  ? 'Updating Payment...'
+                  : retryPayMethod === 'upi' && upiAvailable
+                    ? 'Submit UPI Reference'
+                    : 'Confirm Pay Cash at Counter'}
+              </button>
+            </form>
+          )}
         </section>
       )}
     </div>

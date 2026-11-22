@@ -75,8 +75,8 @@ export const PrintHomePage: React.FC = () => {
           </button>
         </div>
 
-        {/* File Limits Strip */}
-        <div className="portal-card-subtle p-3.5 grid grid-cols-1 sm:grid-cols-3 gap-3 text-[12.5px]">
+        {/* File Limits & Shop Info Strip */}
+        <div className="portal-card-subtle p-3.5 grid grid-cols-1 sm:grid-cols-2 gap-3 text-[12.5px]">
           <div className="flex items-center gap-2">
             <FileText size={16} className="text-[var(--color-accent)] shrink-0" aria-hidden="true" />
             <div>
@@ -100,6 +100,15 @@ export const PrintHomePage: React.FC = () => {
             <div>
               <div className="font-bold text-[var(--color-text-primary)]">Shop Hours</div>
               <div className="text-[var(--color-text-muted)]">{capabilities.shopHours}</div>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <HelpCircle size={16} className="text-[var(--color-accent)] shrink-0" aria-hidden="true" />
+            <div>
+              <div className="font-bold text-[var(--color-text-primary)]">Shop Assistance</div>
+              <div className="text-[var(--color-text-muted)]">
+                {capabilities.shopAddress} · {capabilities.shopContactPhone}
+              </div>
             </div>
           </div>
         </div>

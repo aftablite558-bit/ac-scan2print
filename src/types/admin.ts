@@ -3,6 +3,7 @@ export type WallpaperId = 'wall-dusk' | 'wall-street' | 'wall-room';
 
 export type MainRoute =
   | 'home'
+  | 'hardware'
   | 'cms'
   | 'enquiries'
   | 'bihar-updates'

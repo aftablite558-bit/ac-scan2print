@@ -19,6 +19,7 @@ import { usePortal } from '../context/PortalContext';
 import { calculateEstimateBreakdown, formatInr } from '../lib/pricing';
 import {
   formatFileSize,
+  inspectClientFileBytes,
   parseCustomPageRange,
   validateClientEvidenceFile,
   validateOptionalPhone,
@@ -108,12 +109,28 @@ export const OptionsAndPaymentPage: React.FC = () => {
 
   const maxCopies = capabilities?.maxCopies ?? 20;
   const supportedSizes = capabilities?.supportedPaperSizes ?? (['A4'] as readonly PaperSize[]);
-  const supportedModes = capabilities?.supportedPrintModes ?? (['bw', 'colour'] as readonly PrintMode[]);
-  const supportedSides = capabilities?.supportedPrintSides ?? (['single', 'duplex'] as readonly PrintSides[]);
+  const supportedModes = capabilities?.supportedPrintModes ?? (['bw'] as readonly PrintMode[]);
+  const supportedSides = capabilities?.supportedPrintSides ?? (['single'] as readonly PrintSides[]);
   const supportedOrientations =
     capabilities?.supportedOrientations ?? (['auto', 'portrait', 'landscape'] as readonly Orientation[]);
   const supportedScaling =
     capabilities?.supportedScalingModes ?? (['fit', 'actual'] as readonly ScalingMode[]);
+
+  const capabilityNotices: string[] = [];
+  if (capabilities && !capabilities.capabilitiesKnown) {
+    capabilityNotices.push(
+      'Shop printer hardware capabilities have not yet been verified on record. Unverified colour, double-sided, and extra paper options are hidden until confirmed.'
+    );
+  } else if (capabilities) {
+    if (capabilities.colourSupported === 'unknown') {
+      capabilityNotices.push('Colour printing is disabled because colour support is currently unverified.');
+    } else if (capabilities.colourSupported === 'no') {
+      capabilityNotices.push('Configured shop printers currently support Black & White printing only.');
+    }
+    if (capabilities.duplexSupported === 'unknown') {
+      capabilityNotices.push('Double-sided printing is hidden until duplex support is confirmed on shop printers.');
+    }
+  }
 
   const upiAvailable = Boolean(paymentSettings?.upiEnabled && paymentSettings.upiId);
 
@@ -187,12 +204,32 @@ export const OptionsAndPaymentPage: React.FC = () => {
               </p>
             </div>
 
-            {/* Print Mode (B&W / Colour) */}
+            {capabilityNotices.length > 0 && (
+              <div
+                role="status"
+                className="flex items-start gap-2 text-[12.5px] text-[var(--color-text-secondary)] bg-[var(--color-surface-subtle)] border border-[var(--color-border)] p-3 rounded-[12px]"
+              >
+                <Info size={15} className="shrink-0 mt-0.5 text-[var(--color-accent)]" aria-hidden="true" />
+                <div className="space-y-0.5">
+                  {capabilityNotices.map((note, idx) => (
+                    <p key={idx} className="m-0">
+                      {note}
+                    </p>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Print Mode (B&W / Colour — strictly gated on verified/configured capability) */}
             <div className="space-y-2">
               <span className="block text-[13px] font-bold text-[var(--color-text-primary)]">
                 Print Colour Mode
               </span>
-              <div className="grid grid-cols-2 gap-2.5" role="radiogroup" aria-label="Print Colour Mode">
+              <div
+                className={`grid gap-2.5 ${supportedModes.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}
+                role="radiogroup"
+                aria-label="Print Colour Mode"
+              >
                 {supportedModes.map((mode) => {
                   const selected = preferences.printMode === mode;
                   return (
@@ -223,7 +260,12 @@ export const OptionsAndPaymentPage: React.FC = () => {
             {/* Paper Size & Sides */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div className="space-y-2">
-                <span className="block text-[13px] font-bold">Paper Size</span>
+                <span className="block text-[13px] font-bold">
+                  Paper Size{' '}
+                  {capabilities && !capabilities.paperSizesKnown && (
+                    <span className="text-[11.5px] font-normal text-[var(--color-text-muted)]">(Default A4)</span>
+                  )}
+                </span>
                 <div className="flex flex-wrap gap-2" role="radiogroup" aria-label="Paper Size">
                   {supportedSizes.map((size) => {
                     const selected = preferences.paperSize === size;
@@ -249,7 +291,11 @@ export const OptionsAndPaymentPage: React.FC = () => {
 
               <div className="space-y-2">
                 <span className="block text-[13px] font-bold">Print Sides</span>
-                <div className="grid grid-cols-2 gap-2" role="radiogroup" aria-label="Print Sides">
+                <div
+                  className={`grid gap-2 ${supportedSides.length > 1 ? 'grid-cols-2' : 'grid-cols-1'}`}
+                  role="radiogroup"
+                  aria-label="Print Sides"
+                >
                   {supportedSides.map((sides) => {
                     const selected = preferences.printSides === sides;
                     return (
@@ -485,7 +531,7 @@ export const OptionsAndPaymentPage: React.FC = () => {
                 <dd className="text-[20px] font-bold text-[var(--color-accent)] tabular-nums">
                   {estimate.pricingConfigured
                     ? formatInr(estimate.finalEstimatedAmount)
-                    : 'Counter confirmation'}
+                    : 'Counter quote pending'}
                 </dd>
               </div>
             </dl>
@@ -493,7 +539,9 @@ export const OptionsAndPaymentPage: React.FC = () => {
             <div className="flex items-start gap-2 text-[12px] text-[var(--color-text-muted)] bg-[var(--color-surface-subtle)] p-2.5 rounded-[10px]">
               <Info size={15} className="shrink-0 mt-0.5 text-[var(--color-accent)]" aria-hidden="true" />
               <span>
-                Estimated total only — final price will be confirmed by Aman Computer counter staff after document verification.
+                {estimate.pricingConfigured
+                  ? 'Estimated total only — final price will be confirmed by Aman Computer counter staff after document verification.'
+                  : 'No published rate rule matched this option yet. Final pricing requires active shop pricing rules or counter confirmation.'}
               </span>
             </div>
           </section>
@@ -659,18 +707,24 @@ export const OptionsAndPaymentPage: React.FC = () => {
                         onChange={(e) => {
                           setEvidenceError(null);
                           const f = e.target.files?.[0];
+                          e.target.value = '';
                           if (!f) return;
                           const check = validateClientEvidenceFile({
                             name: f.name,
                             type: f.type,
                             size: f.size,
                           });
-                          if (!check.valid) {
+                          if (!check.valid || !check.normalizedMime) {
                             setEvidenceError(check.error);
                             return;
                           }
-                          setEvidenceFile(f);
-                          e.target.value = '';
+                          void inspectClientFileBytes(f, check.normalizedMime, 'evidence').then((bytesRes) => {
+                            if (!bytesRes.valid) {
+                              setEvidenceError(bytesRes.error);
+                              return;
+                            }
+                            setEvidenceFile(f);
+                          });
                         }}
                       />
                     </label>

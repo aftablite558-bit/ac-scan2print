@@ -178,6 +178,11 @@ export const HelpPage: React.FC = () => {
           <div className="text-[var(--color-text-muted)]">
             {capabilities?.shopHours || 'Counter hours apply'} · {capabilities?.shopAddress}
           </div>
+          {capabilities?.shopContactPhone && (
+            <div className="text-[12.5px] text-[var(--color-text-muted)]">
+              Assistance: {capabilities.shopContactPhone}
+            </div>
+          )}
         </div>
         <button
           type="button"

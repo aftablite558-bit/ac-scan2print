@@ -47,21 +47,51 @@ export interface PricingRulePublic {
   isMockSample: boolean;
 }
 
+export type TriStateCapability = 'yes' | 'no' | 'unknown';
+
 export interface PortalCapabilities {
   maxFilesPerJob: number;
   maxFileSizeBytes: number;
   maxCopies: number;
+  draftRetentionHours?: number;
+  completedRetentionHours?: number;
   allowedExtensions: readonly string[];
   supportedPaperSizes: readonly PaperSize[];
   supportedPrintModes: readonly PrintMode[];
   supportedPrintSides: readonly PrintSides[];
   supportedOrientations: readonly Orientation[];
   supportedScalingModes: readonly ScalingMode[];
+  capabilitiesKnown: boolean;
+  configuredPrinterCount: number;
+  verifiedPrinterCount: number;
+  colourSupported: TriStateCapability;
+  duplexSupported: TriStateCapability;
+  paperSizesKnown: boolean;
   retentionNotice: string;
   shopName: string;
   shopHours: string;
   shopContactPhone: string;
   shopAddress: string;
+  pricingRules: PricingRulePublic[];
+}
+
+export interface PublicPortalConfigPayload {
+  systemLimits: {
+    maxFilesPerJob: number;
+    maxFileSizeBytes: number;
+    maxCopies: number;
+    draftRetentionHours: number;
+    completedRetentionHours: number;
+  };
+  printerCapabilities: {
+    configuredPrinterCount: number;
+    verifiedPrinterCount: number;
+    capabilitiesKnown: boolean;
+    colourSupported: TriStateCapability;
+    duplexSupported: TriStateCapability;
+    paperSizesKnown: boolean;
+    supportedPaperSizes: PaperSize[];
+  };
   pricingRules: PricingRulePublic[];
 }
 
@@ -73,6 +103,7 @@ export interface PublicPaymentSettingsResponse {
   paymentInstructions: string;
   cashEnabled: boolean;
   isMockMode?: boolean;
+  portalConfig?: PublicPortalConfigPayload;
 }
 
 export interface SelectedUploadFileItem {

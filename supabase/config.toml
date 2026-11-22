@@ -81,10 +81,16 @@ verify_jwt = false
 [functions.admin-retry-print-job]
 verify_jwt = false
 
+[functions.admin-printers]
+verify_jwt = false
+
 [functions.cleanup-expired-print-files]
 verify_jwt = false
 
 [functions.agent-enroll]
+verify_jwt = false
+
+[functions.agent-sync-printers]
 verify_jwt = false
 
 [functions.agent-heartbeat]
@@ -95,3 +101,4 @@ verify_jwt = false
 
 [functions.agent-report-job-event]
 verify_jwt = false
+

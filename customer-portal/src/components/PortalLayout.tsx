@@ -86,7 +86,7 @@ export const PortalLayout: React.FC<PortalLayoutProps> = ({ children }) => {
           role="status"
           className="bg-[var(--color-surface-subtle)] border-b border-[var(--color-border)] px-4 py-1.5 text-center text-[11.5px] font-medium text-[var(--color-text-muted)]"
         >
-          Phase 3A Frontend Preview · Sample development pricing & local session storage (no live printing or payment charges)
+          Preview Mode · Local session & sample configuration active (live shop connection not configured)
         </div>
       )}
 

@@ -289,6 +289,135 @@ export function parseCustomPageRange(
   };
 }
 
+export function detectClientMagicMime(
+  bytes: Uint8Array
+): 'application/pdf' | 'image/jpeg' | 'image/png' | 'image/webp' | null {
+  if (bytes.length < 4) return null;
+  if (
+    bytes.length >= 5 &&
+    bytes[0] === 0x25 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x44 &&
+    bytes[3] === 0x46 &&
+    bytes[4] === 0x2d
+  ) {
+    return 'application/pdf';
+  }
+  if (bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff) {
+    return 'image/jpeg';
+  }
+  if (
+    bytes.length >= 8 &&
+    bytes[0] === 0x89 &&
+    bytes[1] === 0x50 &&
+    bytes[2] === 0x4e &&
+    bytes[3] === 0x47 &&
+    bytes[4] === 0x0d &&
+    bytes[5] === 0x0a &&
+    bytes[6] === 0x1a &&
+    bytes[7] === 0x0a
+  ) {
+    return 'image/png';
+  }
+  if (
+    bytes.length >= 12 &&
+    bytes[0] === 0x52 &&
+    bytes[1] === 0x49 &&
+    bytes[2] === 0x46 &&
+    bytes[3] === 0x46 &&
+    bytes[8] === 0x57 &&
+    bytes[9] === 0x45 &&
+    bytes[10] === 0x42 &&
+    bytes[11] === 0x50
+  ) {
+    return 'image/webp';
+  }
+  return null;
+}
+
+export async function inspectClientFileBytes(
+  file: Blob & { name?: string },
+  expectedMime: string,
+  scope: 'document' | 'evidence' = 'document'
+): Promise<{ valid: boolean; detectedMime: string | null; pageCount: number; error: string | null }> {
+  if (!Number.isFinite(file.size) || file.size <= 0) {
+    return { valid: false, detectedMime: null, pageCount: 0, error: 'Selected file is empty (0 bytes).' };
+  }
+
+  try {
+    const headLen = Math.min(file.size, 65536);
+    const headBytes = new Uint8Array(await file.slice(0, headLen).arrayBuffer());
+    const detected = detectClientMagicMime(headBytes);
+    const label = file.name ? `'${file.name}'` : 'Selected file';
+
+    if (!detected) {
+      return {
+        valid: false,
+        detectedMime: null,
+        pageCount: 0,
+        error: `${label} does not match a valid PDF or image signature. Renamed executables or unsupported files are not permitted.`,
+      };
+    }
+
+    const allowed = scope === 'evidence'
+      ? new Set(['image/jpeg', 'image/png', 'image/webp'])
+      : new Set(['application/pdf', 'image/jpeg', 'image/png']);
+    if (!allowed.has(detected) || detected !== expectedMime) {
+      return {
+        valid: false,
+        detectedMime: detected,
+        pageCount: 0,
+        error: `${label} file content (${detected}) does not match its extension (${expectedMime}).`,
+      };
+    }
+
+    if (detected === 'application/pdf') {
+      const sampleBytes =
+        file.size <= 2 * 1024 * 1024
+          ? new Uint8Array(await file.arrayBuffer())
+          : new Uint8Array([
+              ...headBytes,
+              ...new Uint8Array(await file.slice(Math.max(0, file.size - 65536), file.size).arrayBuffer()),
+            ]);
+      const text = new TextDecoder('latin1').decode(sampleBytes);
+      if (!text.includes('%%EOF') && !text.includes('endobj')) {
+        return {
+          valid: false,
+          detectedMime: detected,
+          pageCount: 0,
+          error: `${label} appears to be a corrupt or truncated PDF file.`,
+        };
+      }
+      const leafMatches = text.match(/\/Type\s*\/Page(?![a-zA-Z0-9_])/g);
+      if (leafMatches && leafMatches.length > 0) {
+        return { valid: true, detectedMime: detected, pageCount: leafMatches.length, error: null };
+      }
+      const countMatches = [...text.matchAll(/\/Type\s*\/Pages\b[\s\S]{0,200}?\/Count\s+(\d+)/g)];
+      const counts = countMatches
+        .map((m) => Number.parseInt(m[1], 10))
+        .filter((n) => Number.isFinite(n) && n > 0);
+      if (counts.length > 0) {
+        return { valid: true, detectedMime: detected, pageCount: Math.max(...counts), error: null };
+      }
+      return {
+        valid: false,
+        detectedMime: detected,
+        pageCount: 0,
+        error: `${label} contains no readable PDF pages and may be corrupted.`,
+      };
+    }
+
+    return { valid: true, detectedMime: detected, pageCount: 1, error: null };
+  } catch {
+    return {
+      valid: false,
+      detectedMime: null,
+      pageCount: 0,
+      error: 'Could not read the selected file bytes cleanly.',
+    };
+  }
+}
+
 export async function estimateDocumentPageCountFromFile(file: File): Promise<number> {
   const ext = extractExtension(file.name);
   if (ext !== 'pdf') return 1;

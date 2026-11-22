@@ -22,6 +22,7 @@ import {
   type PrintPrinter,
   type PrintSides,
   type PrintSystemSettings,
+  type PublicPortalBootstrapData,
   type RuntimeEnv,
   type Scan2PrintBackendAdapter,
 } from './types.ts';
@@ -126,6 +127,43 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       const { data, error } = await adminClient.from('print_payment_settings').select('*').eq('id', 1).single();
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
       return data as PrintPaymentSettings;
+    },
+
+    async getPublicPortalBootstrapData(): Promise<PublicPortalBootstrapData> {
+      const [sysRes, printersRes, rulesRes] = await Promise.all([
+        adminClient
+          .from('print_system_settings')
+          .select(
+            'max_file_size_bytes, max_files_per_job, max_copies, draft_retention_hours, completed_retention_hours'
+          )
+          .eq('id', 1)
+          .single(),
+        adminClient
+          .from('print_printers')
+          .select(
+            'is_enabled, approval_status, archived_at, printer_status, supported_paper_sizes, supports_colour, supports_duplex, capabilities_verified'
+          )
+          .is('archived_at', null)
+          .eq('is_enabled', true),
+        adminClient
+          .from('print_pricing_rules')
+          .select(
+            'id, rule_name, paper_size, print_mode, print_sides, pricing_unit, rate, minimum_charge, is_active, valid_from, valid_until'
+          )
+          .eq('is_active', true),
+      ]);
+      if (sysRes.error) throw new AppError(500, 'DB_ERROR', sysRes.error.message);
+      if (printersRes.error) throw new AppError(500, 'DB_ERROR', printersRes.error.message);
+      if (rulesRes.error) throw new AppError(500, 'DB_ERROR', rulesRes.error.message);
+      return {
+        systemSettings: sysRes.data as PublicPortalBootstrapData['systemSettings'],
+        printers: (printersRes.data ?? []) as PublicPortalBootstrapData['printers'],
+        pricingRules: ((rulesRes.data ?? []) as PrintPricingRule[]).map((r) => ({
+          ...r,
+          rate: Number(r.rate),
+          minimum_charge: Number(r.minimum_charge),
+        })),
+      };
     },
 
     async updatePaymentSettings(patch) {
@@ -342,10 +380,90 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       return data as PrintPayment;
     },
 
+    async listPrinters(options) {
+      let query = adminClient.from('print_printers').select('*').order('created_at', { ascending: false });
+      if (!options?.includeArchived) {
+        query = query.is('archived_at', null);
+      }
+      const { data, error } = await query;
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintPrinter[];
+    },
+
     async getPrinterById(printerId: string) {
       const { data, error } = await adminClient.from('print_printers').select('*').eq('id', printerId).maybeSingle();
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
       return data as PrintPrinter | null;
+    },
+
+    async createPrinter(input) {
+      const { data, error } = await adminClient
+        .from('print_printers')
+        .insert({
+          printer_name: input.printerName,
+          printer_model: input.printerModel,
+          system_printer_name: input.systemPrinterName,
+          device_id: input.deviceId,
+          connection_type: input.connectionType,
+          supported_paper_sizes: input.supportedPaperSizes,
+          supports_colour: input.supportsColour,
+          supports_duplex: input.supportsDuplex,
+          capabilities_verified: input.capabilitiesVerified,
+          printer_status: input.printerStatus,
+          is_enabled: input.isEnabled,
+          is_default: input.isDefault,
+          discovery_source: input.discoverySource,
+          approval_status: input.approvalStatus,
+          last_seen_at: input.lastSeenAt,
+          last_verified_at: input.lastVerifiedAt,
+          audit_notes: input.auditNotes,
+        })
+        .select('*')
+        .single();
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return data as PrintPrinter;
+    },
+
+    async updatePrinter(printerId: string, patch: Partial<PrintPrinter>) {
+      const { data, error } = await adminClient
+        .from('print_printers')
+        .update(patch)
+        .eq('id', printerId)
+        .select('*')
+        .single();
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return data as PrintPrinter;
+    },
+
+    async deletePrinter(printerId: string) {
+      const { error } = await adminClient.from('print_printers').delete().eq('id', printerId);
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+    },
+
+    async countPrinterReferences(printerId: string) {
+      const [jobsRes, activeJobsRes, attemptsRes] = await Promise.all([
+        adminClient
+          .from('print_jobs')
+          .select('id', { count: 'exact', head: true })
+          .eq('assigned_printer_id', printerId),
+        adminClient
+          .from('print_jobs')
+          .select('id', { count: 'exact', head: true })
+          .eq('assigned_printer_id', printerId)
+          .in('status', ['queued', 'claimed', 'downloading', 'printing', 'submitted_to_spooler']),
+        adminClient
+          .from('print_job_attempts')
+          .select('id', { count: 'exact', head: true })
+          .eq('printer_id', printerId),
+      ]);
+      if (jobsRes.error) throw new AppError(500, 'DB_ERROR', jobsRes.error.message);
+      if (activeJobsRes.error) throw new AppError(500, 'DB_ERROR', activeJobsRes.error.message);
+      if (attemptsRes.error) throw new AppError(500, 'DB_ERROR', attemptsRes.error.message);
+      return {
+        jobs: jobsRes.count ?? 0,
+        activeJobs: activeJobsRes.count ?? 0,
+        attempts: attemptsRes.count ?? 0,
+      };
     },
 
     async updatePrinterStatus(printerId: string, patch) {
@@ -357,6 +475,25 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
         .maybeSingle();
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
       return data as PrintPrinter | null;
+    },
+
+    async listDevices() {
+      const { data, error } = await adminClient
+        .from('print_devices')
+        .select('id, device_name, device_status, agent_version, os_version, last_heartbeat_at, approved_at, revoked_at, created_at')
+        .order('created_at', { ascending: false });
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintDevice[];
+    },
+
+    async getDeviceById(deviceId: string) {
+      const { data, error } = await adminClient
+        .from('print_devices')
+        .select('*')
+        .eq('id', deviceId)
+        .maybeSingle();
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return data as PrintDevice | null;
     },
 
     async getDeviceByCredentialHash(hash: string) {
@@ -458,6 +595,20 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       if (error) throw new AppError(409, 'CLAIM_FAILED', error.message);
       const rows = (data ?? []) as ClaimedJobResult[];
       return rows[0] ?? null;
+    },
+
+    async listRecentEvents(limit = 30, eventTypes?: string[]) {
+      let query = adminClient
+        .from('print_events')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(limit);
+      if (eventTypes && eventTypes.length > 0) {
+        query = query.in('event_type', eventTypes);
+      }
+      const { data, error } = await query;
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintEvent[];
     },
 
     async appendEvent(input) {

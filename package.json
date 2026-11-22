@@ -13,9 +13,11 @@
     "clean": "rm -rf dist dist-customer server.js",
     "lint": "tsc --noEmit",
     "lint:customer": "tsc -p customer-portal/tsconfig.json --noEmit",
+    "test:phase0": "tsx --test tests/phase0/*.test.ts src/utils/hardwareAudit.test.ts",
     "test:phase2": "tsx --test tests/phase2/*.test.ts",
     "test:phaseC": "tsx --test tests/phaseC/*.test.ts",
-    "test:phase3a": "tsx --test tests/phase3a/*.test.ts"
+    "test:phase3a": "tsx --test tests/phase3a/*.test.ts",
+    "test:phase3": "tsx --test tests/phase3/*.test.ts"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",

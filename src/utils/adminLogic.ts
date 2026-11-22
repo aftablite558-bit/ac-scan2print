@@ -25,6 +25,7 @@ export const BIHAR_CATEGORIES: readonly BiharCategory[] = [
 
 const VALID_MAINS: MainRoute[] = [
   'home',
+  'hardware',
   'cms',
   'enquiries',
   'bihar-updates',
@@ -42,6 +43,10 @@ export function parseHash(hash: string): ParsedRoute {
   const rawSub = parts[1];
   const sub = rawSub === 'catalog' ? 'services' : rawSub;
 
+  if (first === 'hardware') {
+    const validHardware = ['printers', 'discovery', 'checklist'];
+    return { main: 'hardware', sub: sub && validHardware.includes(sub) ? sub : 'printers' };
+  }
   if (first === 'cms') {
     const validCms = [
       'business',
@@ -81,6 +86,8 @@ export function getPageTitle(route: ParsedRoute): string {
   switch (route.main) {
     case 'home':
       return 'Admin Dashboard — AMAN COMPUTER';
+    case 'hardware':
+      return 'Hardware & Printers — AMAN COMPUTER';
     case 'cms':
       return 'CMS & Business — AMAN COMPUTER';
     case 'enquiries':

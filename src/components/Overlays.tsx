@@ -163,6 +163,9 @@ const SearchModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     () =>
       [
         { label: 'Overview', sub: 'Admin Dashboard', route: '#/home' },
+        { label: 'Hardware & Printers', sub: 'Operations › Printer Registry', route: '#/hardware/printers' },
+        { label: 'Agent Discovery Prep', sub: 'Hardware › Windows Agent', route: '#/hardware/discovery' },
+        { label: 'Hardware Audit Checklist', sub: 'Hardware › Verification', route: '#/hardware/checklist' },
         { label: 'Business profile', sub: 'CMS › Business', route: '#/cms/business' },
         { label: 'Hero section CMS', sub: 'CMS › Hero', route: '#/cms/hero' },
         { label: 'Owner & AI Portrait', sub: 'CMS › BiRefNet Portrait', route: '#/cms/portrait' },

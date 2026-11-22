@@ -21,6 +21,7 @@ import {
   type PrintPrinter,
   type PrintSides,
   type PrintSystemSettings,
+  type PublicPortalBootstrapData,
   type RuntimeEnv,
   type Scan2PrintBackendAdapter,
 } from '../../supabase/functions/_shared/types.ts';
@@ -193,6 +194,45 @@ export class TestSupabaseSimulator {
 
       async getPaymentSettings() {
         return { ...sim.paymentSettings };
+      },
+
+      async getPublicPortalBootstrapData(): Promise<PublicPortalBootstrapData> {
+        return {
+          systemSettings: {
+            max_file_size_bytes: sim.systemSettings.max_file_size_bytes,
+            max_files_per_job: sim.systemSettings.max_files_per_job,
+            max_copies: sim.systemSettings.max_copies,
+            draft_retention_hours: sim.systemSettings.draft_retention_hours,
+            completed_retention_hours: sim.systemSettings.completed_retention_hours,
+          },
+          printers: sim.printers
+            .filter((p) => !p.archived_at && p.is_enabled)
+            .map((p) => ({
+              is_enabled: p.is_enabled,
+              approval_status: p.approval_status,
+              archived_at: p.archived_at,
+              printer_status: p.printer_status,
+              supported_paper_sizes: [...p.supported_paper_sizes],
+              supports_colour: p.supports_colour,
+              supports_duplex: p.supports_duplex,
+              capabilities_verified: p.capabilities_verified,
+            })),
+          pricingRules: sim.pricingRules
+            .filter((r) => r.is_active)
+            .map((r) => ({
+              id: r.id,
+              rule_name: r.rule_name,
+              paper_size: r.paper_size,
+              print_mode: r.print_mode,
+              print_sides: r.print_sides,
+              pricing_unit: r.pricing_unit,
+              rate: r.rate,
+              minimum_charge: r.minimum_charge,
+              is_active: r.is_active,
+              valid_from: r.valid_from,
+              valid_until: r.valid_until,
+            })),
+        };
       },
 
       async updatePaymentSettings(patch) {
@@ -409,9 +449,76 @@ export class TestSupabaseSimulator {
         return { ...next };
       },
 
+      async listPrinters(options) {
+        return sim.printers
+          .filter((p) => (options?.includeArchived ? true : !p.archived_at))
+          .map((p) => ({ ...p }));
+      },
+
       async getPrinterById(printerId: string) {
         const found = sim.printers.find((p) => p.id === printerId);
         return found ? { ...found } : null;
+      },
+
+      async createPrinter(input) {
+        const nowIso = new Date(sim.nowMs).toISOString();
+        const printer: PrintPrinter = {
+          id: crypto.randomUUID(),
+          printer_name: input.printerName,
+          printer_model: input.printerModel,
+          system_printer_name: input.systemPrinterName,
+          device_id: input.deviceId,
+          connection_type: input.connectionType,
+          supported_paper_sizes: [...input.supportedPaperSizes],
+          supports_colour: input.supportsColour,
+          supports_duplex: input.supportsDuplex,
+          capabilities_verified: input.capabilitiesVerified,
+          printer_status: input.printerStatus,
+          is_enabled: input.isEnabled,
+          is_default: input.isDefault,
+          discovery_source: input.discoverySource,
+          approval_status: input.approvalStatus,
+          last_seen_at: input.lastSeenAt,
+          last_verified_at: input.lastVerifiedAt,
+          archived_at: null,
+          archived_by: null,
+          audit_notes: input.auditNotes,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+        sim.printers.push(printer);
+        return { ...printer };
+      },
+
+      async updatePrinter(printerId: string, patch: Partial<PrintPrinter>) {
+        const idx = sim.printers.findIndex((p) => p.id === printerId);
+        if (idx === -1) throw new AppError(404, 'PRINTER_NOT_FOUND', 'Printer not found.');
+        const next: PrintPrinter = {
+          ...sim.printers[idx],
+          ...patch,
+          updated_at: new Date(sim.nowMs).toISOString(),
+        };
+        if (next.archived_at && (next.is_enabled || next.is_default || next.printer_status !== 'disabled')) {
+          throw new AppError(500, 'DB_CONSTRAINT', 'chk_print_printers_archived_disabled');
+        }
+        sim.printers[idx] = next;
+        return { ...next };
+      },
+
+      async deletePrinter(printerId: string) {
+        const refs = sim.attempts.some((a) => a.printer_id === printerId);
+        if (refs) {
+          throw new AppError(409, 'FK_CONSTRAINT', 'Cannot delete printer referenced by print_job_attempts.');
+        }
+        sim.printers = sim.printers.filter((p) => p.id !== printerId);
+      },
+
+      async countPrinterReferences(printerId: string) {
+        const jobs = sim.jobs.filter((j) => j.assigned_printer_id === printerId);
+        const activeStatuses = new Set(['queued', 'claimed', 'downloading', 'printing', 'submitted_to_spooler']);
+        const activeJobs = jobs.filter((j) => activeStatuses.has(j.status)).length;
+        const attempts = sim.attempts.filter((a) => a.printer_id === printerId).length;
+        return { jobs: jobs.length, activeJobs, attempts };
       },
 
       async updatePrinterStatus(printerId: string, patch) {
@@ -419,6 +526,15 @@ export class TestSupabaseSimulator {
         if (idx === -1) return null;
         sim.printers[idx] = { ...sim.printers[idx], ...patch, updated_at: new Date(sim.nowMs).toISOString() };
         return { ...sim.printers[idx] };
+      },
+
+      async listDevices() {
+        return sim.devices.map((d) => ({ ...d, credential_hash: '' }));
+      },
+
+      async getDeviceById(deviceId: string) {
+        const found = sim.devices.find((d) => d.id === deviceId);
+        return found ? { ...found } : null;
       },
 
       async getDeviceByCredentialHash(hash: string) {
@@ -475,7 +591,14 @@ export class TestSupabaseSimulator {
         if (job.status !== 'approved') throw new AppError(409, 'INVALID_STATE_TRANSITION', 'Must be approved');
         if (job.payment_status !== 'paid') throw new AppError(409, 'PAYMENT_NOT_VERIFIED', 'Must be paid');
         const printer = sim.printers.find((p) => p.id === input.printerId);
-        if (!printer || !printer.is_enabled || printer.printer_status === 'disabled') {
+        if (
+          !printer ||
+          printer.archived_at ||
+          printer.approval_status === 'pending_review' ||
+          printer.approval_status === 'rejected' ||
+          !printer.is_enabled ||
+          printer.printer_status === 'disabled'
+        ) {
           throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Printer unavailable');
         }
         const activeAttempt = sim.attempts.find((a) => a.job_id === job.id && a.finished_at === null);
@@ -510,7 +633,16 @@ export class TestSupabaseSimulator {
         const candidate = sim.jobs.find((j) => {
           if (j.status !== 'queued' || j.payment_status !== 'paid' || !j.assigned_printer_id) return false;
           const printer = sim.printers.find((p) => p.id === j.assigned_printer_id);
-          if (!printer || printer.device_id !== input.deviceId || !printer.is_enabled) return false;
+          if (
+            !printer ||
+            printer.archived_at ||
+            printer.approval_status === 'pending_review' ||
+            printer.approval_status === 'rejected' ||
+            printer.device_id !== input.deviceId ||
+            !printer.is_enabled
+          ) {
+            return false;
+          }
           const hasActive = sim.attempts.some((a) => a.job_id === j.id && a.finished_at === null);
           return !hasActive;
         });
@@ -569,6 +701,16 @@ export class TestSupabaseSimulator {
           printer_id: attempt.printer_id,
           lease_expires_at: leaseExpiresAt,
         };
+      },
+
+      async listRecentEvents(limit = 30, eventTypes?: string[]) {
+        const filtered = eventTypes && eventTypes.length > 0
+          ? sim.events.filter((e) => eventTypes.includes(e.event_type))
+          : sim.events;
+        return [...filtered]
+          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+          .slice(0, limit)
+          .map((e) => ({ ...e }));
       },
 
       async appendEvent(input) {

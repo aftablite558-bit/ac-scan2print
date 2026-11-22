@@ -51,9 +51,24 @@ export interface CreateUploadUrlResponse {
   expiresInSeconds: number;
 }
 
+export interface RemoveDraftFileRequest {
+  jobId: string;
+  draftUploadSecret: string;
+  fileId: string;
+}
+
 export interface FinalizePrintUploadRequest {
   jobId: string;
   draftUploadSecret: string;
+  paperSize?: PaperSize;
+  printMode?: PrintMode;
+  printSides?: PrintSides;
+  copies?: number;
+  orientation?: Orientation;
+  scaling?: ScalingMode;
+  requestedPageRange?: string;
+  customerName?: string;
+  customerPhone?: string;
 }
 
 export interface FinalizePrintUploadResponse {
@@ -103,6 +118,7 @@ export interface CustomerPortalApiAdapter {
 
   createDraftJob(req: CreateDraftJobRequest): Promise<CreateDraftJobResponse>;
   requestUploadUrl(req: CreateUploadUrlRequest): Promise<CreateUploadUrlResponse>;
+  removeDraftFile?(req: RemoveDraftFileRequest): Promise<void>;
   uploadFileBytes(
     signedUrl: string,
     file: File,

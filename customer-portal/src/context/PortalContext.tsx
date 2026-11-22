@@ -7,11 +7,16 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import type { CustomerPortalApiAdapter } from '../api/CustomerPortalAdapter';
+import type {
+  CustomerPortalApiAdapter,
+  FinalizePrintUploadResponse,
+} from '../api/CustomerPortalAdapter';
 import { MockCustomerPortalAdapter } from '../api/mockCustomerAdapter';
+import { SupabaseCustomerPortalAdapter } from '../api/supabaseCustomerAdapter';
+import { validateCustomerSupabaseConfig } from '../lib/env';
 import { parseCustomerRoute } from '../lib/pricing';
 import {
-  estimateDocumentPageCountFromFile,
+  inspectClientFileBytes,
   parseCustomPageRange,
   validateClientDocumentFile,
 } from '../lib/validation';
@@ -120,13 +125,30 @@ function readRecentTokens(): RecentSessionJobRef[] {
   }
 }
 
-export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  // Phase 3A Frontend Only: strictly uses isolated development MockCustomerPortalAdapter
-  const adapterRef = useRef<MockCustomerPortalAdapter | null>(null);
-  if (!adapterRef.current) {
-    adapterRef.current = new MockCustomerPortalAdapter();
+function createCustomerPortalAdapter(): { adapter: CustomerPortalApiAdapter; configError: string | null } {
+  const supa = validateCustomerSupabaseConfig();
+  if (supa.error) {
+    return { adapter: new MockCustomerPortalAdapter(), configError: supa.error };
   }
-  const adapter = adapterRef.current;
+  if (supa.configured && supa.config) {
+    return {
+      adapter: new SupabaseCustomerPortalAdapter({
+        supabaseUrl: supa.config.url,
+        supabaseAnonKey: supa.config.anonKey,
+      }),
+      configError: null,
+    };
+  }
+  return { adapter: new MockCustomerPortalAdapter(), configError: null };
+}
+
+export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+  const adapterInitRef = useRef<{ adapter: CustomerPortalApiAdapter; configError: string | null } | null>(null);
+  if (!adapterInitRef.current) {
+    adapterInitRef.current = createCustomerPortalAdapter();
+  }
+  const adapter = adapterInitRef.current.adapter;
+  const envConfigError = adapterInitRef.current.configError;
 
   const [pathname, setPathname] = useState<string>(() =>
     typeof window !== 'undefined' ? window.location.pathname : '/quick-print'
@@ -144,17 +166,23 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
 
   const [capabilities, setCapabilities] = useState<PortalCapabilities | null>(null);
   const [capabilitiesLoading, setCapabilitiesLoading] = useState(true);
-  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(null);
+  const [capabilitiesError, setCapabilitiesError] = useState<string | null>(envConfigError);
 
   const [paymentSettings, setPaymentSettings] = useState<PublicPaymentSettingsResponse | null>(null);
   const [paymentSettingsLoading, setPaymentSettingsLoading] = useState(true);
 
   const [selectedFiles, setSelectedFiles] = useState<SelectedUploadFileItem[]>([]);
+  const selectedFilesRef = useRef<SelectedUploadFileItem[]>(selectedFiles);
+  selectedFilesRef.current = selectedFiles;
+
   const [fileAlertError, setFileAlertError] = useState<string | null>(null);
   const [preferences, setPreferences] = useState<PrintPreferencesInput>(DEFAULT_PREFERENCES);
 
   const idempotencyKeyRef = useRef<string>(crypto.randomUUID());
   const draftSessionRef = useRef<{ jobId: string; draftUploadSecret: string } | null>(null);
+  const draftPromiseRef = useRef<Promise<{ jobId: string; draftUploadSecret: string }> | null>(null);
+  const finalizedPendingPaymentRef = useRef<FinalizePrintUploadResponse | null>(null);
+  const submittingLockRef = useRef(false);
 
   const [submittingOrder, setSubmittingOrder] = useState(false);
   const [submitOrderError, setSubmitOrderError] = useState<string | null>(null);
@@ -208,7 +236,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
   const loadConfig = useCallback(async () => {
     setCapabilitiesLoading(true);
     setPaymentSettingsLoading(true);
-    setCapabilitiesError(null);
+    setCapabilitiesError(envConfigError);
     try {
       const [caps, pay] = await Promise.all([
         adapter.getPortalCapabilities(),
@@ -216,6 +244,20 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       ]);
       setCapabilities(caps);
       setPaymentSettings(pay);
+      // Keep default/current print preferences strictly within verified/supported capabilities
+      setPreferences((prev) => ({
+        ...prev,
+        paperSize: caps.supportedPaperSizes.includes(prev.paperSize)
+          ? prev.paperSize
+          : (caps.supportedPaperSizes[0] ?? 'A4'),
+        printMode: caps.supportedPrintModes.includes(prev.printMode)
+          ? prev.printMode
+          : (caps.supportedPrintModes[0] ?? 'bw'),
+        printSides: caps.supportedPrintSides.includes(prev.printSides)
+          ? prev.printSides
+          : (caps.supportedPrintSides[0] ?? 'single'),
+        copies: Math.min(Math.max(1, prev.copies), caps.maxCopies),
+      }));
     } catch (err) {
       setCapabilitiesError(
         err instanceof Error ? err.message : 'Unable to load print portal settings.'
@@ -224,7 +266,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       setCapabilitiesLoading(false);
       setPaymentSettingsLoading(false);
     }
-  }, [adapter]);
+  }, [adapter, envConfigError]);
 
   useEffect(() => {
     void loadConfig();
@@ -234,28 +276,41 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
     setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'));
   }, []);
 
+  // Single deduplicated draft job creation across concurrent uploads / retries
   const ensureDraftJobSession = useCallback(async () => {
     if (draftSessionRef.current) return draftSessionRef.current;
-    const draft = await adapter.createDraftJob({
-      paperSize: preferences.paperSize,
-      printMode: preferences.printMode,
-      printSides: preferences.printSides,
-      copies: preferences.copies,
-      orientation: preferences.orientation,
-      scaling: preferences.scaling,
-      requestedPageRange: preferences.requestedPageRange,
-      customerName: preferences.customerName || undefined,
-      customerPhone: preferences.customerPhone || undefined,
-      submissionIdempotencyKey: idempotencyKeyRef.current,
-    });
-    if (!draft.draftUploadSecret) {
-      throw new Error('Could not initialize secure draft upload session.');
+    if (draftPromiseRef.current) return draftPromiseRef.current;
+
+    const creation = (async () => {
+      const draft = await adapter.createDraftJob({
+        paperSize: preferences.paperSize,
+        printMode: preferences.printMode,
+        printSides: preferences.printSides,
+        copies: preferences.copies,
+        orientation: preferences.orientation,
+        scaling: preferences.scaling,
+        requestedPageRange: preferences.requestedPageRange,
+        customerName: preferences.customerName || undefined,
+        customerPhone: preferences.customerPhone || undefined,
+        submissionIdempotencyKey: idempotencyKeyRef.current,
+      });
+      if (!draft.draftUploadSecret) {
+        throw new Error('Could not initialize secure draft upload session.');
+      }
+      const session = {
+        jobId: draft.jobId,
+        draftUploadSecret: draft.draftUploadSecret,
+      };
+      draftSessionRef.current = session;
+      return session;
+    })();
+
+    draftPromiseRef.current = creation;
+    try {
+      return await creation;
+    } finally {
+      draftPromiseRef.current = null;
     }
-    draftSessionRef.current = {
-      jobId: draft.jobId,
-      draftUploadSecret: draft.draftUploadSecret,
-    };
-    return draftSessionRef.current;
   }, [adapter, preferences]);
 
   const runSingleFileUpload = useCallback(
@@ -320,7 +375,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         maxFileSizeBytes: capabilities?.maxFileSizeBytes ?? 20 * 1024 * 1024,
       };
       const incoming = Array.from(files);
-      let runningCount = selectedFiles.length;
+      let runningCount = selectedFilesRef.current.length;
       const errors: string[] = [];
       const accepted: SelectedUploadFileItem[] = [];
 
@@ -334,15 +389,22 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           if (check.error) errors.push(check.error);
           continue;
         }
+
+        // Magic-byte & PDF structure inspection BEFORE requesting signed URLs
+        const byteInspection = await inspectClientFileBytes(rawFile, check.normalizedMime, 'document');
+        if (!byteInspection.valid) {
+          if (byteInspection.error) errors.push(byteInspection.error);
+          continue;
+        }
+
         runningCount += 1;
-        const estimatedPageCount = await estimateDocumentPageCountFromFile(rawFile);
         accepted.push({
           localId: crypto.randomUUID(),
           file: rawFile,
           filename: rawFile.name.trim(),
           mimeType: check.normalizedMime,
           fileSizeBytes: rawFile.size,
-          estimatedPageCount,
+          estimatedPageCount: byteInspection.pageCount,
           status: 'ready',
           progressPct: 0,
           errorMessage: null,
@@ -359,22 +421,38 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         await runSingleFileUpload(item);
       }
     },
-    [capabilities, selectedFiles.length, runSingleFileUpload]
+    [capabilities, runSingleFileUpload]
   );
 
-  const removeFile = useCallback((localId: string) => {
-    setFileAlertError(null);
-    setSelectedFiles((prev) => prev.filter((f) => f.localId !== localId));
-  }, []);
+  const removeFile = useCallback(
+    (localId: string) => {
+      setFileAlertError(null);
+      const target = selectedFilesRef.current.find((f) => f.localId === localId);
+      setSelectedFiles((prev) => prev.filter((f) => f.localId !== localId));
+
+      if (target?.remoteFileId && draftSessionRef.current && adapter.removeDraftFile) {
+        void adapter
+          .removeDraftFile({
+            jobId: draftSessionRef.current.jobId,
+            draftUploadSecret: draftSessionRef.current.draftUploadSecret,
+            fileId: target.remoteFileId,
+          })
+          .catch(() => {
+            // Silently ignore if draft already expired or cleaned
+          });
+      }
+    },
+    [adapter]
+  );
 
   const retryFileUpload = useCallback(
     async (localId: string) => {
-      const target = selectedFiles.find((f) => f.localId === localId);
+      const target = selectedFilesRef.current.find((f) => f.localId === localId);
       if (!target) return;
       setFileAlertError(null);
       await runSingleFileUpload(target);
     },
-    [selectedFiles, runSingleFileUpload]
+    [runSingleFileUpload]
   );
 
   const updatePreferences = useCallback((patch: Partial<PrintPreferencesInput>) => {
@@ -404,51 +482,50 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       utrReference?: string;
       evidenceFile?: File | null;
     }): Promise<SubmissionConfirmationRecord> => {
+      if (submittingLockRef.current && confirmation) {
+        return confirmation;
+      }
+      submittingLockRef.current = true;
       setSubmitOrderError(null);
       setSubmittingOrder(true);
+
       try {
-        // Idempotent guard: if already submitted with same idempotency key, reuse confirmation
+        // Idempotent guard: if already submitted with same order session, reuse confirmation
         if (confirmation) {
           navigate('/quick-print/success');
           return confirmation;
         }
 
-        const readyFiles = selectedFiles.filter((f) => f.status === 'uploaded');
+        const readyFiles = selectedFilesRef.current.filter((f) => f.status === 'uploaded');
         if (readyFiles.length === 0) {
           throw new Error('Upload at least one valid document before submitting your request.');
         }
 
-        // Create a fresh submission carrying latest selected print preferences cleanly
-        const orderKey = idempotencyKeyRef.current;
-        const freshDraft = await adapter.createDraftJob({
-          paperSize: preferences.paperSize,
-          printMode: preferences.printMode,
-          printSides: preferences.printSides,
-          copies: preferences.copies,
-          orientation: preferences.orientation,
-          scaling: preferences.scaling,
-          requestedPageRange: preferences.requestedPageRange,
-          customerName: preferences.customerName.trim() || undefined,
-          customerPhone: preferences.customerPhone.trim() || undefined,
-          submissionIdempotencyKey: `${orderKey}-submit`,
-        });
-
-        const draftSecret = freshDraft.draftUploadSecret || draftSessionRef.current?.draftUploadSecret || '';
-        for (const item of readyFiles) {
-          const uploadRes = await adapter.requestUploadUrl({
-            jobId: freshDraft.jobId,
-            draftUploadSecret: draftSecret,
-            filename: item.filename,
-            mimeType: item.mimeType,
-            fileSizeBytes: item.fileSizeBytes,
+        // Reuse the SAME draft job (no second draft job & no double-upload!)
+        // And if finalize already succeeded in a prior attempt before payment failed, reuse finalizedPendingPaymentRef!
+        let finalized = finalizedPendingPaymentRef.current;
+        if (!finalized) {
+          const session = draftSessionRef.current;
+          if (!session) {
+            throw new Error('Upload session expired. Please re-upload your document.');
+          }
+          finalized = await adapter.finalizeUploadAndSubmit({
+            jobId: session.jobId,
+            draftUploadSecret: session.draftUploadSecret,
+            paperSize: preferences.paperSize,
+            printMode: preferences.printMode,
+            printSides: preferences.printSides,
+            copies: preferences.copies,
+            orientation: preferences.orientation,
+            scaling: preferences.scaling,
+            requestedPageRange: preferences.requestedPageRange,
+            customerName: preferences.customerName.trim() || undefined,
+            customerPhone: preferences.customerPhone.trim() || undefined,
           });
-          await adapter.uploadFileBytes(uploadRes.signedUrl, item.file, () => {});
+          finalizedPendingPaymentRef.current = finalized;
+          // Clear draft secret ref since draft transitioned to submitted
+          draftSessionRef.current = null;
         }
-
-        const finalized = await adapter.finalizeUploadAndSubmit({
-          jobId: freshDraft.jobId,
-          draftUploadSecret: draftSecret,
-        });
 
         let evidencePath: string | undefined;
         let evidenceMimeType: string | undefined;
@@ -471,7 +548,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           transactionReference: paymentInput.utrReference,
           evidenceStoragePath: evidencePath,
           evidenceMimeType,
-          idempotencyKey: `pay-${orderKey}`,
+          idempotencyKey: `pay-${idempotencyKeyRef.current}-${paymentInput.paymentMethod}`,
         });
 
         const record: SubmissionConfirmationRecord = {
@@ -495,6 +572,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
           isMockMode: adapter.isMockMode,
         };
 
+        finalizedPendingPaymentRef.current = null;
         setConfirmation(record);
         try {
           window.sessionStorage.setItem(SESSION_CONFIRMATION_KEY, JSON.stringify(record));
@@ -526,19 +604,27 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
         setSubmitOrderError(msg);
         throw new Error(msg);
       } finally {
+        submittingLockRef.current = false;
         setSubmittingOrder(false);
       }
     },
-    [adapter, confirmation, navigate, preferences, selectedFiles]
+    [adapter, confirmation, navigate, preferences]
   );
 
   const startNewPrintOrder = useCallback(() => {
     idempotencyKeyRef.current = crypto.randomUUID();
     draftSessionRef.current = null;
+    draftPromiseRef.current = null;
+    finalizedPendingPaymentRef.current = null;
     setSelectedFiles([]);
     setFileAlertError(null);
     setSubmitOrderError(null);
-    setPreferences(DEFAULT_PREFERENCES);
+    setPreferences({
+      ...DEFAULT_PREFERENCES,
+      paperSize: capabilities?.supportedPaperSizes[0] ?? 'A4',
+      printMode: capabilities?.supportedPrintModes[0] ?? 'bw',
+      printSides: capabilities?.supportedPrintSides[0] ?? 'single',
+    });
     setConfirmation(null);
     try {
       window.sessionStorage.removeItem(SESSION_CONFIRMATION_KEY);
@@ -546,7 +632,7 @@ export const PortalProvider: React.FC<{ children: React.ReactNode }> = ({ childr
       // Ignore
     }
     navigate('/quick-print/upload');
-  }, [navigate]);
+  }, [capabilities, navigate]);
 
   const value = useMemo<PortalContextValue>(
     () => ({

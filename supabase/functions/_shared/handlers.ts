@@ -11,6 +11,7 @@ import {
   handleErrorResponse,
   inspectUploadedBytes,
   jsonResponse,
+  parseAndValidatePageRange,
   sha256Hex,
   validateDeclaredUploadMeta,
   validateUtrReference,
@@ -23,6 +24,14 @@ import {
   isTerminalStatus,
 } from './stateMachine.ts';
 import {
+  computeHardwareAuditSummary,
+  normalizeConnectionType,
+  normalizeSupportedPaperSizes,
+  sanitizeOptionalText,
+  triStateToNullableBoolean,
+  validatePrinterName,
+} from './printers.ts';
+import {
   AppError,
   type JobStatus,
   type Orientation,
@@ -31,6 +40,7 @@ import {
   type PrintDevice,
   type PrintJob,
   type PrintMode,
+  type PrintPrinter,
   type PrintSides,
   type RuntimeEnv,
   type ScalingMode,
@@ -217,10 +227,11 @@ export async function handleCreatePrintJob(
     const orientation = (typeof body.orientation === 'string' ? body.orientation : 'auto') as Orientation;
     const scaling = (typeof body.scaling === 'string' ? body.scaling : 'fit') as ScalingMode;
     const copies = typeof body.copies === 'number' ? body.copies : Number(body.copies ?? 1);
-    const requestedPageRange =
+    const rawRange =
       typeof body.requestedPageRange === 'string' && body.requestedPageRange.trim()
         ? body.requestedPageRange.trim().slice(0, 64)
         : 'all';
+    const requestedPageRange = parseAndValidatePageRange(rawRange).normalized;
 
     if (!PAPER_SIZES.has(paperSize)) {
       throw new AppError(400, 'INVALID_OPTION', `Unsupported paperSize '${paperSize}'.`);
@@ -348,7 +359,34 @@ export async function handleCreatePrintUploadUrl(
     await verifyDraftSecret(job, req, body);
 
     if (job.status !== 'draft') {
-      throw new AppError(409, 'JOB_NOT_DRAFT', 'Files may only be uploaded while job is in draft state.');
+      throw new AppError(409, 'JOB_NOT_DRAFT', 'Files may only be modified while job is in draft state.');
+    }
+
+    const action = typeof body.action === 'string' ? body.action.trim() : 'issue';
+    if (action === 'remove_file') {
+      const fileId = typeof body.fileId === 'string' ? body.fileId.trim() : '';
+      if (!fileId) {
+        throw new AppError(400, 'MISSING_FILE_ID', 'fileId is required to remove a draft file.');
+      }
+      const files = await adapter.getFilesForJob(job.id);
+      const target = files.find((f) => f.id === fileId && !f.deleted_at);
+      if (!target) {
+        throw new AppError(404, 'FILE_NOT_FOUND', 'Draft file record not found.');
+      }
+      await adapter.deleteStorageObject(target.storage_bucket, target.storage_path);
+      await adapter.updateFileRecord(target.id, {
+        deleted_at: new Date().toISOString(),
+      });
+      await adapter.appendEvent({
+        jobId: job.id,
+        actorType: 'customer',
+        actorId: null,
+        eventType: 'draft_file_removed',
+        previousStatus: 'draft',
+        newStatus: 'draft',
+        metadata: { file_id: target.id },
+      });
+      return jsonResponse(200, { removed: true, fileId: target.id }, cors);
     }
 
     const sys = await adapter.getSystemSettings();
@@ -434,6 +472,63 @@ export async function handleFinalizePrintUpload(
     }
 
     const sys = await adapter.getSystemSettings();
+
+    for (const forbidden of ['status', 'paymentStatus', 'payment_status', 'subtotal', 'finalAmount', 'final_amount', 'verifiedPageCount']) {
+      if (forbidden in body) {
+        throw new AppError(400, 'FORBIDDEN_CLIENT_FIELD', `Field '${forbidden}' is server-controlled and cannot be set by client.`);
+      }
+    }
+
+    const effectivePaperSize = (typeof body.paperSize === 'string' ? body.paperSize : job.paper_size) as PaperSize;
+    const effectivePrintMode = (typeof body.printMode === 'string' ? body.printMode : job.print_mode) as PrintMode;
+    const effectivePrintSides = (typeof body.printSides === 'string' ? body.printSides : job.print_sides) as PrintSides;
+    const effectiveOrientation = (typeof body.orientation === 'string' ? body.orientation : job.orientation) as Orientation;
+    const effectiveScaling = (typeof body.scaling === 'string' ? body.scaling : job.scaling) as ScalingMode;
+    const effectiveCopies =
+      body.copies !== undefined
+        ? typeof body.copies === 'number'
+          ? body.copies
+          : Number(body.copies)
+        : job.copies;
+    const rawRequestedRange =
+      typeof body.requestedPageRange === 'string'
+        ? body.requestedPageRange.trim().slice(0, 64) || 'all'
+        : job.requested_page_range;
+    const effectiveCustomerName =
+      body.customerName !== undefined
+        ? typeof body.customerName === 'string' && body.customerName.trim()
+          ? body.customerName.trim().slice(0, 100)
+          : null
+        : job.customer_name;
+    const effectiveCustomerPhone =
+      body.customerPhone !== undefined
+        ? typeof body.customerPhone === 'string' && body.customerPhone.trim()
+          ? body.customerPhone.trim().slice(0, 24)
+          : null
+        : job.customer_phone;
+
+    if (!PAPER_SIZES.has(effectivePaperSize)) {
+      throw new AppError(400, 'INVALID_OPTION', `Unsupported paperSize '${effectivePaperSize}'.`);
+    }
+    if (!PRINT_MODES.has(effectivePrintMode)) {
+      throw new AppError(400, 'INVALID_OPTION', `Unsupported printMode '${effectivePrintMode}'.`);
+    }
+    if (!PRINT_SIDES.has(effectivePrintSides)) {
+      throw new AppError(400, 'INVALID_OPTION', `Unsupported printSides '${effectivePrintSides}'.`);
+    }
+    if (!ORIENTATIONS.has(effectiveOrientation)) {
+      throw new AppError(400, 'INVALID_OPTION', `Unsupported orientation '${effectiveOrientation}'.`);
+    }
+    if (!SCALING_MODES.has(effectiveScaling)) {
+      throw new AppError(400, 'INVALID_OPTION', `Unsupported scaling '${effectiveScaling}'.`);
+    }
+    if (!Number.isInteger(effectiveCopies) || effectiveCopies < 1 || effectiveCopies > sys.max_copies) {
+      throw new AppError(400, 'INVALID_COPIES', `Copies must be an integer between 1 and ${sys.max_copies}.`);
+    }
+    if (effectiveCustomerPhone && !/^[+0-9\s-]{7,20}$/.test(effectiveCustomerPhone)) {
+      throw new AppError(400, 'INVALID_PHONE', 'Customer phone number format is invalid.');
+    }
+
     const files = (await adapter.getFilesForJob(job.id)).filter((f) => !f.deleted_at);
     if (files.length === 0) {
       throw new AppError(400, 'NO_FILES_UPLOADED', 'At least one uploaded document is required before finalizing.');
@@ -470,6 +565,7 @@ export async function handleFinalizePrintUpload(
         await adapter.updateFileRecord(file.id, {
           validation_status: 'invalid',
           validation_error: msg,
+          deleted_at: new Date().toISOString(),
         });
         // Immediately purge invalid/spoofed object from private bucket
         await adapter.deleteStorageObject(file.storage_bucket, file.storage_path);
@@ -486,19 +582,22 @@ export async function handleFinalizePrintUpload(
       }
     }
 
+    const parsedRange = parseAndValidatePageRange(rawRequestedRange, totalVerifiedPages);
+    const billablePagesPerCopy = parsedRange.selectedPageCount ?? totalVerifiedPages;
+
     // Authoritative server-side pricing lookup (never trusts client amounts; fails safely if unconfigured)
     const pricingRule = await adapter.findActivePricingRule({
-      paperSize: job.paper_size,
-      printMode: job.print_mode,
-      printSides: job.print_sides,
+      paperSize: effectivePaperSize,
+      printMode: effectivePrintMode,
+      printSides: effectivePrintSides,
     });
 
     const price = computeServerPrice({
-      paperSize: job.paper_size,
-      printMode: job.print_mode,
-      printSides: job.print_sides,
-      verifiedPageCount: totalVerifiedPages,
-      copies: job.copies,
+      paperSize: effectivePaperSize,
+      printMode: effectivePrintMode,
+      printSides: effectivePrintSides,
+      verifiedPageCount: billablePagesPerCopy,
+      copies: effectiveCopies,
       rule: pricingRule,
     });
 
@@ -512,6 +611,15 @@ export async function handleFinalizePrintUpload(
       status: 'submitted',
       tracking_token_hash: trackingTokenHash,
       draft_upload_secret_hash: null,
+      paper_size: effectivePaperSize,
+      print_mode: effectivePrintMode,
+      print_sides: effectivePrintSides,
+      copies: effectiveCopies,
+      orientation: effectiveOrientation,
+      scaling: effectiveScaling,
+      requested_page_range: parsedRange.normalized,
+      customer_name: effectiveCustomerName,
+      customer_phone: effectiveCustomerPhone,
       verified_page_count: price.verifiedPageCount,
       physical_sheet_count: price.physicalSheetCount,
       pricing_rule_id: price.pricingRuleId,
@@ -638,6 +746,92 @@ export async function handleGetPublicPaymentSettings(
       upiQrSignedUrl = signed.signedUrl;
     }
 
+    let portalConfig: Record<string, unknown> | undefined;
+    if (adapter.getPublicPortalBootstrapData) {
+      const boot = await adapter.getPublicPortalBootstrapData();
+      const nowMs = Date.now();
+      const eligiblePrinters = boot.printers.filter(
+        (p) =>
+          !p.archived_at &&
+          p.is_enabled &&
+          (p.approval_status === 'manual' || p.approval_status === 'approved') &&
+          p.printer_status !== 'disabled'
+      );
+
+      const configuredPrinterCount = eligiblePrinters.length;
+      const verifiedPrinterCount = eligiblePrinters.filter((p) => p.capabilities_verified).length;
+      const colourSupported: 'yes' | 'no' | 'unknown' = eligiblePrinters.some((p) => p.supports_colour === true)
+        ? 'yes'
+        : configuredPrinterCount > 0 && eligiblePrinters.every((p) => p.supports_colour === false)
+          ? 'no'
+          : 'unknown';
+      const duplexSupported: 'yes' | 'no' | 'unknown' = eligiblePrinters.some((p) => p.supports_duplex === true)
+        ? 'yes'
+        : configuredPrinterCount > 0 && eligiblePrinters.every((p) => p.supports_duplex === false)
+          ? 'no'
+          : 'unknown';
+
+      const sizeSet = new Set<PaperSize>();
+      for (const printer of eligiblePrinters) {
+        for (const sz of printer.supported_paper_sizes ?? []) {
+          if (PAPER_SIZES.has(sz as PaperSize)) {
+            sizeSet.add(sz as PaperSize);
+          }
+        }
+      }
+      const orderedPaperSizes: PaperSize[] = (['A4', 'Legal', 'A3'] as const).filter((s) => sizeSet.has(s));
+      const paperSizesKnown = orderedPaperSizes.length > 0;
+      const capabilitiesKnown =
+        configuredPrinterCount > 0 &&
+        (verifiedPrinterCount > 0 ||
+          colourSupported !== 'unknown' ||
+          duplexSupported !== 'unknown' ||
+          paperSizesKnown);
+
+      const activeRules = boot.pricingRules
+        .filter((r) => {
+          if (!r.is_active) return false;
+          const validFrom = Date.parse(r.valid_from);
+          if (Number.isFinite(validFrom) && nowMs < validFrom) return false;
+          if (r.valid_until) {
+            const validUntil = Date.parse(r.valid_until);
+            if (Number.isFinite(validUntil) && nowMs > validUntil) return false;
+          }
+          return true;
+        })
+        .map((r) => ({
+          id: r.id,
+          ruleName: r.rule_name,
+          paperSize: r.paper_size,
+          printMode: r.print_mode,
+          printSides: r.print_sides,
+          pricingUnit: r.pricing_unit,
+          rate: Number(r.rate),
+          minimumCharge: Number(r.minimum_charge),
+          isMockSample: false,
+        }));
+
+      portalConfig = {
+        systemLimits: {
+          maxFilesPerJob: boot.systemSettings.max_files_per_job,
+          maxFileSizeBytes: boot.systemSettings.max_file_size_bytes,
+          maxCopies: boot.systemSettings.max_copies,
+          draftRetentionHours: boot.systemSettings.draft_retention_hours,
+          completedRetentionHours: boot.systemSettings.completed_retention_hours,
+        },
+        printerCapabilities: {
+          configuredPrinterCount,
+          verifiedPrinterCount,
+          capabilitiesKnown,
+          colourSupported,
+          duplexSupported,
+          paperSizesKnown,
+          supportedPaperSizes: orderedPaperSizes,
+        },
+        pricingRules: activeRules,
+      };
+    }
+
     return jsonResponse(
       200,
       {
@@ -647,6 +841,7 @@ export async function handleGetPublicPaymentSettings(
         displayName: settings.display_name,
         paymentInstructions: settings.payment_instructions,
         cashEnabled: true,
+        ...(portalConfig ? { portalConfig } : {}),
       },
       cors
     );
@@ -1898,3 +2093,586 @@ export async function handleAgentReportJobEvent(
     );
   });
 }
+
+// ---------------------------------------------------------------------------
+// 19. Phase 0 Admin: admin-printers (Manual Printer CRUD, Archive, Device Binding & Audit Summary)
+// ---------------------------------------------------------------------------
+function toPublicDeviceSummary(d: PrintDevice) {
+  return {
+    id: d.id,
+    device_name: d.device_name,
+    device_status: d.device_status,
+    agent_version: d.agent_version,
+    os_version: d.os_version,
+    last_heartbeat_at: d.last_heartbeat_at,
+    approved_at: d.approved_at,
+    revoked_at: d.revoked_at,
+    created_at: d.created_at,
+  };
+}
+
+export async function handleAdminPrinters(
+  req: Request,
+  adapter: Scan2PrintBackendAdapter,
+  env: RuntimeEnv = {}
+): Promise<Response> {
+  return withHttpWrapper(req, 'GET_OR_POST', env, async (cors) => {
+    const admin = await requireMvpAdmin(req, adapter, env);
+    if (!adapter.listPrinters || !adapter.createPrinter || !adapter.updatePrinter || !adapter.listDevices) {
+      throw new AppError(500, 'SERVER_MISCONFIGURED', 'Printer management adapter methods are not configured.');
+    }
+
+    const buildSnapshot = async () => {
+      const [printers, devices, recentEvents] = await Promise.all([
+        adapter.listPrinters!({ includeArchived: true }),
+        adapter.listDevices!(),
+        adapter.listRecentEvents
+          ? adapter.listRecentEvents(25, [
+              'printer_created',
+              'printer_updated',
+              'printer_enabled',
+              'printer_disabled',
+              'printer_device_assigned',
+              'printer_discovery_reviewed',
+              'printer_archived',
+              'printer_deleted',
+              'agent_printers_synced',
+              'agent_device_enrolled',
+            ])
+          : Promise.resolve([]),
+      ]);
+      const publicDevices = devices.map(toPublicDeviceSummary);
+      const auditSummary = computeHardwareAuditSummary(printers, devices);
+      return { printers, devices: publicDevices, auditSummary, recentEvents };
+    };
+
+    if (req.method === 'GET') {
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, snapshot, cors);
+    }
+
+    const body = await parseJsonBody(req);
+    const action = typeof body.action === 'string' ? body.action.trim() : 'list';
+
+    if (action === 'list') {
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, snapshot, cors);
+    }
+
+    if (action === 'create') {
+      const printerName = validatePrinterName(body.printerName);
+      const printerModel = sanitizeOptionalText(body.printerModel, 80);
+      const systemPrinterName = sanitizeOptionalText(body.systemPrinterName, 120);
+      const connectionType = normalizeConnectionType(body.connectionType);
+      const supportsColour = triStateToNullableBoolean(body.supportsColour);
+      const supportsDuplex = triStateToNullableBoolean(body.supportsDuplex);
+      const supportedPaperSizes = normalizeSupportedPaperSizes(body.supportedPaperSizes);
+      const auditNotes = sanitizeOptionalText(body.auditNotes, 400);
+      const isEnabled = body.isEnabled === true;
+
+      let deviceId: string | null = null;
+      if (typeof body.deviceId === 'string' && body.deviceId.trim()) {
+        const dev = adapter.getDeviceById ? await adapter.getDeviceById(body.deviceId.trim()) : null;
+        if (!dev) {
+          throw new AppError(404, 'DEVICE_NOT_FOUND', 'Assigned Print Agent device not found.');
+        }
+        if (dev.device_status === 'revoked') {
+          throw new AppError(409, 'DEVICE_REVOKED', 'Cannot assign printer to a revoked Print Agent device.');
+        }
+        deviceId = dev.id;
+      }
+
+      const created = await adapter.createPrinter({
+        printerName,
+        printerModel,
+        systemPrinterName,
+        deviceId,
+        connectionType,
+        supportedPaperSizes,
+        supportsColour,
+        supportsDuplex,
+        capabilitiesVerified: false,
+        printerStatus: isEnabled ? 'unknown' : 'disabled',
+        isEnabled,
+        isDefault: false,
+        discoverySource: 'manual',
+        approvalStatus: 'manual',
+        lastSeenAt: null,
+        lastVerifiedAt: null,
+        auditNotes,
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'printer_created',
+        previousStatus: null,
+        newStatus: created.printer_status,
+        metadata: {
+          printer_id: created.id,
+          printer_name: created.printer_name,
+          connection_type: created.connection_type,
+          supports_colour: created.supports_colour,
+          supports_duplex: created.supports_duplex,
+          supported_paper_sizes: created.supported_paper_sizes,
+        },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(201, { printer: created, ...snapshot }, cors);
+    }
+
+    const printerId = typeof body.printerId === 'string' ? body.printerId.trim() : '';
+    if (!printerId) {
+      throw new AppError(400, 'MISSING_PRINTER_ID', 'printerId is required.');
+    }
+    const existing = await adapter.getPrinterById(printerId);
+    if (!existing) {
+      throw new AppError(404, 'PRINTER_NOT_FOUND', 'Printer not found.');
+    }
+
+    if (action === 'update') {
+      if (existing.archived_at) {
+        throw new AppError(409, 'PRINTER_ARCHIVED', 'Archived printers cannot be edited.');
+      }
+
+      const nextName =
+        body.printerName !== undefined ? validatePrinterName(body.printerName) : existing.printer_name;
+      const nextModel =
+        body.printerModel !== undefined
+          ? sanitizeOptionalText(body.printerModel, 80)
+          : (existing.printer_model ?? null);
+      const nextSystemName =
+        body.systemPrinterName !== undefined
+          ? sanitizeOptionalText(body.systemPrinterName, 120)
+          : existing.system_printer_name;
+      const nextConnection =
+        body.connectionType !== undefined
+          ? normalizeConnectionType(body.connectionType)
+          : existing.connection_type;
+      const nextColour =
+        body.supportsColour !== undefined
+          ? triStateToNullableBoolean(body.supportsColour)
+          : existing.supports_colour;
+      const nextDuplex =
+        body.supportsDuplex !== undefined
+          ? triStateToNullableBoolean(body.supportsDuplex)
+          : existing.supports_duplex;
+      const nextSizes =
+        body.supportedPaperSizes !== undefined
+          ? normalizeSupportedPaperSizes(body.supportedPaperSizes)
+          : existing.supported_paper_sizes;
+      const nextNotes =
+        body.auditNotes !== undefined
+          ? sanitizeOptionalText(body.auditNotes, 400)
+          : (existing.audit_notes ?? null);
+
+      let nextDeviceId = existing.device_id;
+      if (body.deviceId !== undefined) {
+        if (body.deviceId === null || body.deviceId === '') {
+          nextDeviceId = null;
+        } else if (typeof body.deviceId === 'string') {
+          const dev = adapter.getDeviceById ? await adapter.getDeviceById(body.deviceId.trim()) : null;
+          if (!dev) {
+            throw new AppError(404, 'DEVICE_NOT_FOUND', 'Assigned Print Agent device not found.');
+          }
+          if (dev.device_status === 'revoked') {
+            throw new AppError(409, 'DEVICE_REVOKED', 'Cannot assign printer to a revoked Print Agent device.');
+          }
+          nextDeviceId = dev.id;
+        }
+      }
+
+      const nextEnabled =
+        typeof body.isEnabled === 'boolean' ? body.isEnabled : existing.is_enabled;
+      if (
+        nextEnabled &&
+        (existing.approval_status === 'pending_review' || existing.approval_status === 'rejected')
+      ) {
+        throw new AppError(
+          409,
+          'PRINTER_APPROVAL_REQUIRED',
+          'Approve agent-discovered printer before enabling it.'
+        );
+      }
+
+      let nextVerified = existing.capabilities_verified;
+      let nextVerifiedAt = existing.last_verified_at ?? null;
+      if (body.markPhysicallyVerified === true) {
+        if (
+          nextColour === null ||
+          nextDuplex === null ||
+          nextConnection === 'unknown' ||
+          nextSizes.length === 0
+        ) {
+          throw new AppError(
+            400,
+            'INCOMPLETE_CAPABILITIES',
+            'Cannot mark physically verified while connection, colour, duplex, or paper sizes remain unknown.'
+          );
+        }
+        nextVerified = true;
+        nextVerifiedAt = new Date().toISOString();
+      } else if (body.markPhysicallyVerified === false) {
+        nextVerified = false;
+        nextVerifiedAt = null;
+      }
+
+      const nextStatus: PrintPrinter['printer_status'] = !nextEnabled
+        ? 'disabled'
+        : existing.printer_status === 'disabled'
+          ? 'unknown'
+          : existing.printer_status;
+
+      const updated = await adapter.updatePrinter(printerId, {
+        printer_name: nextName,
+        printer_model: nextModel,
+        system_printer_name: nextSystemName,
+        connection_type: nextConnection,
+        supports_colour: nextColour,
+        supports_duplex: nextDuplex,
+        supported_paper_sizes: nextSizes,
+        device_id: nextDeviceId,
+        is_enabled: nextEnabled,
+        printer_status: nextStatus,
+        capabilities_verified: nextVerified,
+        last_verified_at: nextVerifiedAt,
+        audit_notes: nextNotes,
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'printer_updated',
+        previousStatus: existing.printer_status,
+        newStatus: updated.printer_status,
+        metadata: {
+          printer_id: updated.id,
+          printer_name: updated.printer_name,
+          capabilities_verified: updated.capabilities_verified,
+        },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, { printer: updated, ...snapshot }, cors);
+    }
+
+    if (action === 'set_enabled') {
+      if (existing.archived_at) {
+        throw new AppError(409, 'PRINTER_ARCHIVED', 'Cannot enable or disable an archived printer.');
+      }
+      if (typeof body.isEnabled !== 'boolean') {
+        throw new AppError(400, 'INVALID_ENABLED_FLAG', 'isEnabled boolean is required.');
+      }
+      const nextEnabled = body.isEnabled;
+      if (
+        nextEnabled &&
+        (existing.approval_status === 'pending_review' || existing.approval_status === 'rejected')
+      ) {
+        throw new AppError(
+          409,
+          'PRINTER_APPROVAL_REQUIRED',
+          'Discovered printer must be approved by Admin before enabling.'
+        );
+      }
+
+      const nextStatus: PrintPrinter['printer_status'] = nextEnabled
+        ? existing.printer_status === 'disabled'
+          ? 'unknown'
+          : existing.printer_status
+        : 'disabled';
+
+      const updated = await adapter.updatePrinter(printerId, {
+        is_enabled: nextEnabled,
+        printer_status: nextStatus,
+        ...(nextEnabled ? {} : { is_default: false }),
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: nextEnabled ? 'printer_enabled' : 'printer_disabled',
+        previousStatus: existing.printer_status,
+        newStatus: updated.printer_status,
+        metadata: { printer_id: updated.id, printer_name: updated.printer_name },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, { printer: updated, ...snapshot }, cors);
+    }
+
+    if (action === 'assign_device') {
+      if (existing.archived_at) {
+        throw new AppError(409, 'PRINTER_ARCHIVED', 'Cannot assign an archived printer to a device.');
+      }
+      let nextDeviceId: string | null = null;
+      if (typeof body.deviceId === 'string' && body.deviceId.trim()) {
+        const dev = adapter.getDeviceById ? await adapter.getDeviceById(body.deviceId.trim()) : null;
+        if (!dev) {
+          throw new AppError(404, 'DEVICE_NOT_FOUND', 'Assigned Print Agent device not found.');
+        }
+        if (dev.device_status === 'revoked') {
+          throw new AppError(409, 'DEVICE_REVOKED', 'Cannot assign printer to a revoked device.');
+        }
+        nextDeviceId = dev.id;
+      }
+
+      const updated = await adapter.updatePrinter(printerId, { device_id: nextDeviceId });
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'printer_device_assigned',
+        previousStatus: existing.printer_status,
+        newStatus: updated.printer_status,
+        metadata: { printer_id: updated.id, device_id: nextDeviceId },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, { printer: updated, ...snapshot }, cors);
+    }
+
+    if (action === 'review_discovered') {
+      if (existing.archived_at) {
+        throw new AppError(409, 'PRINTER_ARCHIVED', 'Cannot review an archived printer.');
+      }
+      const decision = body.decision === 'approve' || body.decision === 'reject' ? body.decision : null;
+      if (!decision) {
+        throw new AppError(400, 'INVALID_DECISION', "decision must be 'approve' or 'reject'.");
+      }
+
+      const enableAfterApprove = decision === 'approve' && body.enableNow === true;
+      const updated = await adapter.updatePrinter(printerId, {
+        approval_status: decision === 'approve' ? 'approved' : 'rejected',
+        is_enabled: enableAfterApprove,
+        printer_status: enableAfterApprove
+          ? existing.printer_status === 'disabled'
+            ? 'unknown'
+            : existing.printer_status
+          : 'disabled',
+        ...(enableAfterApprove ? {} : { is_default: false }),
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'printer_discovery_reviewed',
+        previousStatus: existing.approval_status ?? 'pending_review',
+        newStatus: updated.approval_status ?? decision,
+        metadata: {
+          printer_id: updated.id,
+          decision,
+          is_enabled: updated.is_enabled,
+        },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, { printer: updated, ...snapshot }, cors);
+    }
+
+    if (action === 'archive') {
+      if (existing.archived_at) {
+        throw new AppError(409, 'PRINTER_ALREADY_ARCHIVED', 'Printer is already archived.');
+      }
+      if (adapter.countPrinterReferences) {
+        const refs = await adapter.countPrinterReferences(printerId);
+        if (refs.activeJobs > 0) {
+          throw new AppError(
+            409,
+            'PRINTER_IN_USE',
+            `Cannot archive printer while ${refs.activeJobs} active print job(s) are queued or printing.`
+          );
+        }
+      }
+
+      const nowIso = new Date().toISOString();
+      const updated = await adapter.updatePrinter(printerId, {
+        archived_at: nowIso,
+        archived_by: admin.id,
+        is_enabled: false,
+        is_default: false,
+        printer_status: 'disabled',
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'printer_archived',
+        previousStatus: existing.printer_status,
+        newStatus: 'disabled',
+        metadata: {
+          printer_id: updated.id,
+          printer_name: updated.printer_name,
+          archived_at: nowIso,
+        },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, { printer: updated, ...snapshot }, cors);
+    }
+
+    if (action === 'delete') {
+      const refs = adapter.countPrinterReferences
+        ? await adapter.countPrinterReferences(printerId)
+        : { jobs: 0, attempts: 0, activeJobs: 0 };
+
+      if (refs.jobs > 0 || refs.attempts > 0) {
+        throw new AppError(
+          409,
+          'HISTORICAL_RECORDS_EXIST',
+          'Printer is referenced by historical print jobs/attempts. Archive the printer instead to preserve audit integrity.'
+        );
+      }
+      if (body.confirmPermanentDelete !== true || !adapter.deletePrinter) {
+        throw new AppError(
+          400,
+          'CONFIRMATION_REQUIRED',
+          'confirmPermanentDelete=true is required to permanently delete a printer with zero job history.'
+        );
+      }
+
+      await adapter.deletePrinter(printerId);
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'printer_deleted',
+        previousStatus: existing.printer_status,
+        newStatus: 'deleted',
+        metadata: { printer_id: existing.id, printer_name: existing.printer_name },
+      });
+
+      const snapshot = await buildSnapshot();
+      return jsonResponse(200, { deletedPrinterId: printerId, ...snapshot }, cors);
+    }
+
+    throw new AppError(400, 'UNSUPPORTED_ACTION', `Unsupported printer action '${action}'.`);
+  });
+}
+
+// ---------------------------------------------------------------------------
+// 20. Phase 0 Future Agent Prep: agent-sync-printers (Windows Agent Printer Discovery)
+// ---------------------------------------------------------------------------
+export async function handleAgentSyncPrinters(
+  req: Request,
+  adapter: Scan2PrintBackendAdapter,
+  env: RuntimeEnv = {}
+): Promise<Response> {
+  return withHttpWrapper(req, 'POST', env, async (cors) => {
+    const device = await requireActiveDevice(req, adapter);
+    if (!adapter.listPrinters || !adapter.createPrinter || !adapter.updatePrinter) {
+      throw new AppError(500, 'SERVER_MISCONFIGURED', 'Printer sync adapter methods are not configured.');
+    }
+
+    const body = await parseJsonBody(req);
+    if (!Array.isArray(body.printers) || body.printers.length === 0) {
+      throw new AppError(400, 'PRINTERS_ARRAY_REQUIRED', 'printers must be a non-empty array.');
+    }
+    if (body.printers.length > 25) {
+      throw new AppError(400, 'TOO_MANY_PRINTERS', 'At most 25 printers may be synced per request.');
+    }
+
+    const existingPrinters = await adapter.listPrinters({ includeArchived: false });
+    const nowIso = new Date().toISOString();
+    const allowedStatuses = new Set<PrintPrinter['printer_status']>([
+      'online',
+      'offline',
+      'error',
+      'paused',
+      'disabled',
+      'unknown',
+    ]);
+
+    const synced: Array<{ id: string; systemPrinterName: string; approvalStatus: string; created: boolean }> = [];
+
+    for (const rawItem of body.printers) {
+      if (!rawItem || typeof rawItem !== 'object') {
+        throw new AppError(400, 'INVALID_PRINTER_ITEM', 'Each printer entry must be an object.');
+      }
+      const item = rawItem as Record<string, unknown>;
+      const systemPrinterName = sanitizeOptionalText(item.systemPrinterName, 120);
+      if (!systemPrinterName) {
+        throw new AppError(400, 'MISSING_SYSTEM_PRINTER_NAME', 'systemPrinterName is required.');
+      }
+
+      const displayName = sanitizeOptionalText(item.printerName, 80) ?? systemPrinterName.slice(0, 80);
+      const printerModel = sanitizeOptionalText(item.printerModel, 80);
+      const connectionType = normalizeConnectionType(item.connectionType);
+      const supportsColour =
+        item.supportsColour !== undefined ? triStateToNullableBoolean(item.supportsColour) : null;
+      const supportsDuplex =
+        item.supportsDuplex !== undefined ? triStateToNullableBoolean(item.supportsDuplex) : null;
+      const supportedPaperSizes = normalizeSupportedPaperSizes(item.supportedPaperSizes);
+      const reportedStatus =
+        typeof item.printerStatus === 'string' && allowedStatuses.has(item.printerStatus as PrintPrinter['printer_status'])
+          ? (item.printerStatus as PrintPrinter['printer_status'])
+          : 'unknown';
+
+      const match = existingPrinters.find(
+        (p) => p.device_id === device.id && p.system_printer_name === systemPrinterName
+      );
+
+      if (match) {
+        const updated = await adapter.updatePrinter(match.id, {
+          last_seen_at: nowIso,
+          printer_status: match.is_enabled ? reportedStatus : 'disabled',
+          ...(match.printer_model ? {} : printerModel ? { printer_model: printerModel } : {}),
+        });
+        synced.push({
+          id: updated.id,
+          systemPrinterName,
+          approvalStatus: updated.approval_status ?? 'approved',
+          created: false,
+        });
+      } else {
+        const created = await adapter.createPrinter({
+          printerName: displayName,
+          printerModel,
+          systemPrinterName,
+          deviceId: device.id,
+          connectionType,
+          supportedPaperSizes,
+          supportsColour,
+          supportsDuplex,
+          capabilitiesVerified: false,
+          printerStatus: reportedStatus,
+          isEnabled: false,
+          isDefault: false,
+          discoverySource: 'agent',
+          approvalStatus: 'pending_review',
+          lastSeenAt: nowIso,
+          lastVerifiedAt: null,
+          auditNotes: 'Discovered by Windows Local Print Agent; awaiting Admin review and physical verification.',
+        });
+        synced.push({
+          id: created.id,
+          systemPrinterName,
+          approvalStatus: 'pending_review',
+          created: true,
+        });
+      }
+    }
+
+    await adapter.appendEvent({
+      jobId: null,
+      actorType: 'agent',
+      actorId: device.id,
+      eventType: 'agent_printers_synced',
+      previousStatus: null,
+      newStatus: null,
+      metadata: {
+        device_id: device.id,
+        count: synced.length,
+        newly_discovered: synced.filter((s) => s.created).length,
+      },
+    });
+
+    return jsonResponse(200, { ok: true, deviceId: device.id, synced }, cors);
+  });
+}
+

@@ -266,6 +266,76 @@ export function validateUtrReference(raw: string): string {
   return normalized;
 }
 
+export function parseAndValidatePageRange(
+  rawRange: string,
+  maxTotalPages?: number
+): { normalized: string; selectedPageCount: number | null } {
+  const trimmed = rawRange.trim().toLowerCase();
+  if (!trimmed || trimmed === 'all') {
+    return { normalized: 'all', selectedPageCount: maxTotalPages ?? null };
+  }
+
+  const segments = trimmed
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+
+  if (segments.length === 0) {
+    throw new AppError(400, 'INVALID_PAGE_RANGE', 'Page range cannot be empty.');
+  }
+
+  const selected = new Set<number>();
+  for (const seg of segments) {
+    if (/^\d+$/.test(seg)) {
+      const page = Number(seg);
+      if (!Number.isInteger(page) || page < 1) {
+        throw new AppError(400, 'INVALID_PAGE_RANGE', `Invalid page number '${seg}'.`);
+      }
+      if (maxTotalPages !== undefined && page > maxTotalPages) {
+        throw new AppError(
+          400,
+          'INVALID_PAGE_RANGE',
+          `Page ${page} exceeds the verified ${maxTotalPages}-page document count.`
+        );
+      }
+      selected.add(page);
+    } else if (/^(\d+)\s*-\s*(\d+)$/.test(seg)) {
+      const match = seg.match(/^(\d+)\s*-\s*(\d+)$/)!;
+      const start = Number(match[1]);
+      const end = Number(match[2]);
+      if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start) {
+        throw new AppError(400, 'INVALID_PAGE_RANGE', `Invalid page range '${seg}'.`);
+      }
+      if (maxTotalPages !== undefined && end > maxTotalPages) {
+        throw new AppError(
+          400,
+          'INVALID_PAGE_RANGE',
+          `Page range '${seg}' exceeds the verified ${maxTotalPages}-page document count.`
+        );
+      }
+      if (end - start > 1000) {
+        throw new AppError(400, 'INVALID_PAGE_RANGE', 'Single page range cannot exceed 1,000 pages.');
+      }
+      if (maxTotalPages !== undefined) {
+        for (let p = start; p <= end; p += 1) {
+          selected.add(p);
+        }
+      }
+    } else {
+      throw new AppError(
+        400,
+        'INVALID_PAGE_RANGE',
+        `Unsupported page range segment '${seg}'. Use e.g. 'all' or '1-3, 5'.`
+      );
+    }
+  }
+
+  return {
+    normalized: segments.join(', '),
+    selectedPageCount: maxTotalPages !== undefined ? selected.size : null,
+  };
+}
+
 export function getClientIp(req: Request): string {
   const xff = req.headers.get('x-forwarded-for');
   if (xff) {

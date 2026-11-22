@@ -13,6 +13,7 @@ import { BiharUpdatesPage } from './pages/BiharUpdatesPage';
 import { AccessAuditPage } from './pages/AccessAuditPage';
 import { SettingsPage } from './pages/SettingsPage';
 import { HelpPage } from './pages/HelpPage';
+import { HardwareAuditPage } from './pages/HardwareAuditPage';
 
 const ActiveRouteView: React.FC = () => {
   const { route } = useAdmin();
@@ -20,6 +21,8 @@ const ActiveRouteView: React.FC = () => {
   switch (route.main) {
     case 'home':
       return <OverviewPage />;
+    case 'hardware':
+      return <HardwareAuditPage />;
     case 'cms':
       if (route.sub === 'services' || route.sub === 'gallery') {
         return <CatalogCmsPage />;

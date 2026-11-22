@@ -5,7 +5,9 @@ import { calculateEstimateBreakdown } from '../lib/pricing';
 import {
   DEFAULT_MAX_FILE_SIZE_BYTES,
   DEFAULT_MAX_FILES_PER_JOB,
+  DOCUMENT_EXTENSION_TO_MIME,
   estimateDocumentPageCountFromFile,
+  inspectClientFileBytes,
   parseCustomPageRange,
   validateClientDocumentFile,
   validateClientEvidenceFile,
@@ -28,6 +30,7 @@ import type {
   FinalizePrintUploadRequest,
   FinalizePrintUploadResponse,
   PrepareEvidenceUploadResponse,
+  RemoveDraftFileRequest,
   SubmitPaymentRequest,
   SubmitPaymentResponse,
 } from './CustomerPortalAdapter';
@@ -70,12 +73,20 @@ const DEFAULT_MOCK_CAPABILITIES: PortalCapabilities = {
   maxFilesPerJob: DEFAULT_MAX_FILES_PER_JOB,
   maxFileSizeBytes: DEFAULT_MAX_FILE_SIZE_BYTES,
   maxCopies: 20,
+  draftRetentionHours: 1,
+  completedRetentionHours: 24,
   allowedExtensions: ['PDF', 'JPG', 'JPEG', 'PNG'],
   supportedPaperSizes: ['A4', 'Legal', 'A3'],
   supportedPrintModes: ['bw', 'colour'],
   supportedPrintSides: ['single', 'duplex'],
   supportedOrientations: ['auto', 'portrait', 'landscape'],
   supportedScalingModes: ['fit', 'actual'],
+  capabilitiesKnown: true,
+  configuredPrinterCount: 1,
+  verifiedPrinterCount: 1,
+  colourSupported: 'yes',
+  duplexSupported: 'yes',
+  paperSizesKnown: true,
   retentionNotice:
     'Documents remain encrypted in private storage during processing and are scheduled for automatic cleanup within 24 hours after completion.',
   shopName: 'AMAN COMPUTER',
@@ -215,9 +226,9 @@ export class MockCustomerPortalAdapter implements CustomerPortalApiAdapter {
       upiEnabled: true,
       upiId: 'amancomputer-dev-sample@upi',
       upiQrSignedUrl: `data:image/svg+xml;utf8,${sampleQrSvg}`,
-      displayName: 'AMAN COMPUTER (Phase 3A Mock Preview)',
+      displayName: 'AMAN COMPUTER (Preview Mode)',
       paymentInstructions:
-        'Development preview only — in Phase 3B this displays the live shop UPI QR configured by Admin.',
+        'Development preview only — live shop mode displays the official UPI QR configured by Aman Computer Admin.',
       cashEnabled: true,
       isMockMode: true,
     };
@@ -305,6 +316,19 @@ export class MockCustomerPortalAdapter implements CustomerPortalApiAdapter {
     };
   }
 
+  public async removeDraftFile(req: RemoveDraftFileRequest): Promise<void> {
+    const job = this.jobs.get(req.jobId);
+    if (!job || job.draftUploadSecret !== req.draftUploadSecret) {
+      throw new Error('Invalid or expired upload session.');
+    }
+    if (job.status !== 'draft') {
+      throw new Error('Cannot remove files after submission.');
+    }
+    job.files = job.files.filter((f) => f.id !== req.fileId);
+    this.uploadedFileBlobs.delete(req.fileId);
+    this.persistToSessionStorage();
+  }
+
   public async uploadFileBytes(
     signedUrl: string,
     file: File,
@@ -356,8 +380,41 @@ export class MockCustomerPortalAdapter implements CustomerPortalApiAdapter {
       throw new Error('Upload at least one file completely before finalizing.');
     }
 
+    // Apply latest print preferences submitted on finalization
+    job.req = {
+      ...job.req,
+      ...(req.paperSize !== undefined ? { paperSize: req.paperSize } : {}),
+      ...(req.printMode !== undefined ? { printMode: req.printMode } : {}),
+      ...(req.printSides !== undefined ? { printSides: req.printSides } : {}),
+      ...(req.copies !== undefined ? { copies: req.copies } : {}),
+      ...(req.orientation !== undefined ? { orientation: req.orientation } : {}),
+      ...(req.scaling !== undefined ? { scaling: req.scaling } : {}),
+      ...(req.requestedPageRange !== undefined ? { requestedPageRange: req.requestedPageRange } : {}),
+      ...(req.customerName !== undefined ? { customerName: req.customerName } : {}),
+      ...(req.customerPhone !== undefined ? { customerPhone: req.customerPhone } : {}),
+    };
+
+    for (const f of job.files) {
+      const blob = this.uploadedFileBlobs.get(f.id);
+      if (blob) {
+        const ext = f.originalFilename.split('.').pop()?.toLowerCase() ?? '';
+        const expectedMime = DOCUMENT_EXTENSION_TO_MIME[ext] ?? blob.type;
+        const byteCheck = await inspectClientFileBytes(blob, expectedMime, 'document');
+        if (!byteCheck.valid) {
+          job.files = job.files.filter((x) => x.id !== f.id);
+          this.uploadedFileBlobs.delete(f.id);
+          this.persistToSessionStorage();
+          throw new Error(byteCheck.error || 'Uploaded file failed signature inspection.');
+        }
+        f.detectedPageCount = byteCheck.pageCount;
+      }
+    }
+
     const totalPages = job.files.reduce((sum, f) => sum + f.detectedPageCount, 0);
     const rangeRes = parseCustomPageRange(job.req.requestedPageRange, totalPages);
+    if (!rangeRes.valid) {
+      throw new Error(rangeRes.error || 'Invalid page range.');
+    }
     const pagesPerCopy =
       rangeRes.valid && rangeRes.selectedPageCount !== null
         ? rangeRes.selectedPageCount

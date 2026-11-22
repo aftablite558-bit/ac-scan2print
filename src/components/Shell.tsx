@@ -16,6 +16,7 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   PanelLeftOpen,
+  Printer,
   Search,
   Settings,
   Shield,
@@ -225,15 +226,20 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       });
     }
     const activeTab = tabItemRefs.current[route.main];
-    if (tabbarPillRef.current && activeTab) {
-      if (routeChanged) {
-        gsap.killTweensOf(tabbarPillRef.current);
-        gsap.set(tabbarPillRef.current, { clearProps: 'transform,transformOrigin' });
+    if (tabbarPillRef.current) {
+      if (activeTab) {
+        gsap.set(tabbarPillRef.current, { opacity: 1 });
+        if (routeChanged) {
+          gsap.killTweensOf(tabbarPillRef.current);
+          gsap.set(tabbarPillRef.current, { clearProps: 'transform,transformOrigin' });
+        }
+        slideClipPill(tabbarPillRef.current, activeTab, {
+          animate: routeChanged,
+          radius: 14,
+        });
+      } else {
+        gsap.set(tabbarPillRef.current, { opacity: 0 });
       }
-      slideClipPill(tabbarPillRef.current, activeTab, {
-        animate: routeChanged,
-        radius: 14,
-      });
     }
   }, [activeSideKey, route.main]);
 
@@ -303,8 +309,13 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         slideClipPill(snavPillRef.current, activeSide, { animate: false, radius: 14 });
       }
       const activeTab = tabItemRefs.current[route.main];
-      if (tabbarPillRef.current && activeTab) {
-        slideClipPill(tabbarPillRef.current, activeTab, { animate: false, radius: 14 });
+      if (tabbarPillRef.current) {
+        if (activeTab) {
+          gsap.set(tabbarPillRef.current, { opacity: 1 });
+          slideClipPill(tabbarPillRef.current, activeTab, { animate: false, radius: 14 });
+        } else {
+          gsap.set(tabbarPillRef.current, { opacity: 0 });
+        }
       }
     };
     window.addEventListener('resize', onResize);
@@ -437,6 +448,12 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       label: 'Operations',
       items: [
         {
+          id: 'hardware',
+          label: 'Hardware & Printers',
+          href: '#/hardware',
+          icon: Printer,
+        },
+        {
           id: 'enquiries',
           label: 'Enquiries',
           href: '#/enquiries',
@@ -463,6 +480,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   const breadcrumb = (() => {
     const mapMain: Record<string, { label: string; href: string }> = {
       home: { label: 'Overview', href: '#/home' },
+      hardware: { label: 'Hardware & Printers', href: '#/hardware' },
       cms: { label: 'CMS', href: '#/cms/business' },
       enquiries: { label: 'Enquiries', href: '#/enquiries' },
       'bihar-updates': { label: 'Bihar Updates', href: '#/bihar-updates' },
@@ -471,6 +489,9 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       help: { label: 'Help', href: '#/help' },
     };
     const subLabels: Record<string, string> = {
+      printers: 'Printer Registry',
+      discovery: 'Agent Discovery Prep',
+      checklist: 'Audit Checklist',
       business: 'Business Profile',
       hero: 'Hero Section',
       portrait: 'Owner & AI Portrait',

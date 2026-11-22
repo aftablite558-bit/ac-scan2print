@@ -32,6 +32,10 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 export type PaymentMethod = 'upi' | 'cash';
 export type PaperSize = 'A4' | 'A3' | 'Legal';
+export type PrinterPaperSize = PaperSize | 'Photo_4x6' | 'Photo_5x7';
+export type PrinterConnectionType = 'usb' | 'wifi' | 'lan' | 'other' | 'unknown';
+export type PrinterApprovalStatus = 'manual' | 'pending_review' | 'approved' | 'rejected';
+export type PrinterDiscoverySource = 'manual' | 'agent';
 export type PrintMode = 'bw' | 'colour';
 export type PrintSides = 'single' | 'duplex';
 export type PricingUnit = 'per_printed_page' | 'per_physical_sheet';
@@ -67,17 +71,24 @@ export interface PrintDevice {
 export interface PrintPrinter {
   id: string;
   printer_name: string;
+  printer_model?: string | null;
   system_printer_name: string | null;
   device_id: string | null;
-  connection_type: 'usb' | 'wifi' | 'lan' | 'unknown';
-  supported_paper_sizes: PaperSize[];
-  supports_colour: boolean;
-  supports_duplex: boolean;
+  connection_type: PrinterConnectionType;
+  supported_paper_sizes: PrinterPaperSize[];
+  supports_colour: boolean | null;
+  supports_duplex: boolean | null;
   capabilities_verified: boolean;
   printer_status: 'online' | 'offline' | 'error' | 'paused' | 'disabled' | 'unknown';
   is_enabled: boolean;
   is_default: boolean;
+  discovery_source?: PrinterDiscoverySource;
+  approval_status?: PrinterApprovalStatus;
   last_seen_at: string | null;
+  last_verified_at?: string | null;
+  archived_at?: string | null;
+  archived_by?: string | null;
+  audit_notes?: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -255,6 +266,46 @@ export interface ClaimedJobResult {
   lease_expires_at: string;
 }
 
+export interface PublicPortalBootstrapData {
+  systemSettings: Pick<
+    PrintSystemSettings,
+    | 'max_file_size_bytes'
+    | 'max_files_per_job'
+    | 'max_copies'
+    | 'draft_retention_hours'
+    | 'completed_retention_hours'
+  >;
+  printers: Array<
+    Pick<
+      PrintPrinter,
+      | 'is_enabled'
+      | 'approval_status'
+      | 'archived_at'
+      | 'printer_status'
+      | 'supported_paper_sizes'
+      | 'supports_colour'
+      | 'supports_duplex'
+      | 'capabilities_verified'
+    >
+  >;
+  pricingRules: Array<
+    Pick<
+      PrintPricingRule,
+      | 'id'
+      | 'rule_name'
+      | 'paper_size'
+      | 'print_mode'
+      | 'print_sides'
+      | 'pricing_unit'
+      | 'rate'
+      | 'minimum_charge'
+      | 'is_active'
+      | 'valid_from'
+      | 'valid_until'
+    >
+  >;
+}
+
 export interface RuntimeEnv {
   FIREBASE_PROJECT_ID?: string;
   CUSTOMER_PORTAL_URL?: string;
@@ -293,6 +344,7 @@ export interface Scan2PrintBackendAdapter {
   // System & Payment Settings
   getSystemSettings(): Promise<PrintSystemSettings>;
   getPaymentSettings(): Promise<PrintPaymentSettings>;
+  getPublicPortalBootstrapData?(): Promise<PublicPortalBootstrapData>;
   updatePaymentSettings(
     patch: Partial<
       Pick<
@@ -365,11 +417,36 @@ export interface Scan2PrintBackendAdapter {
   updatePayment(paymentId: string, patch: Partial<PrintPayment>): Promise<PrintPayment>;
 
   // Printers, Devices & Attempts
+  listPrinters?(options?: { includeArchived?: boolean }): Promise<PrintPrinter[]>;
   getPrinterById(printerId: string): Promise<PrintPrinter | null>;
+  createPrinter?(input: {
+    printerName: string;
+    printerModel: string | null;
+    systemPrinterName: string | null;
+    deviceId: string | null;
+    connectionType: PrinterConnectionType;
+    supportedPaperSizes: PrinterPaperSize[];
+    supportsColour: boolean | null;
+    supportsDuplex: boolean | null;
+    capabilitiesVerified: boolean;
+    printerStatus: PrintPrinter['printer_status'];
+    isEnabled: boolean;
+    isDefault: boolean;
+    discoverySource: PrinterDiscoverySource;
+    approvalStatus: PrinterApprovalStatus;
+    lastSeenAt: string | null;
+    lastVerifiedAt: string | null;
+    auditNotes: string | null;
+  }): Promise<PrintPrinter>;
+  updatePrinter?(printerId: string, patch: Partial<PrintPrinter>): Promise<PrintPrinter>;
+  deletePrinter?(printerId: string): Promise<void>;
+  countPrinterReferences?(printerId: string): Promise<{ jobs: number; attempts: number; activeJobs: number }>;
   updatePrinterStatus?(
     printerId: string,
     patch: Partial<Pick<PrintPrinter, 'printer_status' | 'last_seen_at'>>
   ): Promise<PrintPrinter | null>;
+  listDevices?(): Promise<PrintDevice[]>;
+  getDeviceById?(deviceId: string): Promise<PrintDevice | null>;
   getDeviceByCredentialHash(hash: string): Promise<PrintDevice | null>;
   createDevice(input: {
     deviceName: string;
@@ -382,6 +459,7 @@ export interface Scan2PrintBackendAdapter {
   getActiveAttemptsForJob(jobId: string): Promise<PrintJobAttempt[]>;
   getAttemptById(attemptId: string): Promise<PrintJobAttempt | null>;
   updateAttempt(attemptId: string, patch: Partial<PrintJobAttempt>): Promise<PrintJobAttempt>;
+  listRecentEvents?(limit?: number, eventTypes?: string[]): Promise<PrintEvent[]>;
 
   // Atomic RPCs
   releaseJobToQueue(input: {
