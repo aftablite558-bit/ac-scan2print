@@ -21,6 +21,7 @@ import {
   revealRows,
   revealText,
 } from '../utils/animations';
+import { EMPTY_DASHBOARD_METRICS } from '../utils/workspaceState';
 
 export const OverviewPage: React.FC = () => {
   const {
@@ -42,28 +43,37 @@ export const OverviewPage: React.FC = () => {
   const h1Ref = useRef<HTMLHeadingElement>(null);
   const heroPhotoRef = useRef<HTMLImageElement>(null);
 
-  useEffect(() => {
-    const root = rootRef.current;
-    if (!root) return;
-    if (h1Ref.current) revealText(h1Ref.current, 0.05);
-    if (heroPhotoRef.current && !reducedMotion()) {
-      gsap.fromTo(
-        heroPhotoRef.current,
-        { scale: 1.14 },
-        { scale: 1, duration: dur(1.6), ease: 'expo.out', clearProps: 'transform' }
-      );
-    }
-    const cards = root.querySelectorAll<HTMLElement>('.anim-card');
-    revealCards(cards, { delay: 0.08, stagger: 0.06, from: 0.72 });
-    const rows = root.querySelectorAll<HTMLElement>('.overview-row');
-    revealRows(rows, { delay: 0.42, stagger: 0.045 });
-    const badges = root.querySelectorAll<HTMLElement>('.overview-badge');
-    popBadges(badges, { delay: 0.35, stagger: 0.05 });
-  }, []);
-
   const wallSrc = `/photos/wallpapers/${appearance.wallpaper}.jpg`;
   const bizName = businessProfile?.business_name || 'AMAN COMPUTER';
   const bizSub = businessProfile?.dashboard_subtitle || 'Admin Dashboard';
+  const safeMetrics = metrics ?? EMPTY_DASHBOARD_METRICS;
+  const safeActivities = Array.isArray(recentActivities) ? recentActivities : [];
+  const safeNotifications = Array.isArray(notifications) ? notifications : [];
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const ctx = gsap.context(() => {
+      if (heroPhotoRef.current && !reducedMotion()) {
+        gsap.fromTo(
+          heroPhotoRef.current,
+          { scale: 1.14 },
+          { scale: 1, duration: dur(1.6), ease: 'expo.out', clearProps: 'transform' }
+        );
+      }
+      const cards = root.querySelectorAll<HTMLElement>('.anim-card');
+      revealCards(cards, { delay: 0.08, stagger: 0.06, from: 0.72 });
+      const rows = root.querySelectorAll<HTMLElement>('.overview-row');
+      revealRows(rows, { delay: 0.42, stagger: 0.045 });
+      const badges = root.querySelectorAll<HTMLElement>('.overview-badge');
+      popBadges(badges, { delay: 0.35, stagger: 0.05 });
+    }, root);
+    return () => ctx.revert();
+  }, []);
+
+  useEffect(() => {
+    if (h1Ref.current) revealText(h1Ref.current, 0.05);
+  }, [bizSub]);
 
   return (
     <div ref={rootRef} className="space-y-5">
@@ -71,6 +81,7 @@ export const OverviewPage: React.FC = () => {
       <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4">
         <div>
           <h1
+            key={bizSub}
             ref={h1Ref}
             className="text-[32px] sm:text-[36px] font-medium tracking-[-0.02em] leading-tight"
           >
@@ -149,15 +160,17 @@ export const OverviewPage: React.FC = () => {
             </h2>
 
             <p className="text-[14px] text-white/80 max-w-[580px] leading-relaxed">
-              {businessProfile?.about_summary || heroSection?.hero_description}
+              {businessProfile?.about_summary ||
+                heroSection?.hero_description ||
+                'Smart QR printing, hardware management, document services, and administrative control for AMAN COMPUTER.'}
             </p>
 
             <div className="flex flex-wrap gap-x-8 gap-y-2 pt-1">
               {[
-                { val: `${metrics.publishedServices}/${metrics.totalServices}`, lbl: 'published services' },
-                { val: `${metrics.pendingEnquiries}`, lbl: 'pending enquiries' },
-                { val: `${metrics.publishedGovtUpdates}`, lbl: 'bihar updates live' },
-                { val: `${metrics.galleryImages}`, lbl: 'gallery photos' },
+                { val: `${safeMetrics.publishedServices}/${safeMetrics.totalServices}`, lbl: 'published services' },
+                { val: `${safeMetrics.pendingEnquiries}`, lbl: 'pending enquiries' },
+                { val: `${safeMetrics.publishedGovtUpdates}`, lbl: 'bihar updates live' },
+                { val: `${safeMetrics.galleryImages}`, lbl: 'gallery photos' },
               ].map((s) => (
                 <div key={s.lbl}>
                   <div className="text-[19px] sm:text-[21px] font-medium text-[#fffaf7] tabular-nums leading-tight">
@@ -264,8 +277,8 @@ export const OverviewPage: React.FC = () => {
         {[
           {
             label: 'Total Services',
-            value: `${metrics.totalServices}`,
-            badge: `${metrics.publishedServices} published`,
+            value: `${safeMetrics.totalServices}`,
+            badge: `${safeMetrics.publishedServices} published`,
             sub: 'Printing & cyber catalog',
             bg: 'var(--tile-1)',
             icon: Layers,
@@ -273,8 +286,8 @@ export const OverviewPage: React.FC = () => {
           },
           {
             label: 'Customer Enquiries',
-            value: `${metrics.totalEnquiries}`,
-            badge: metrics.pendingEnquiries > 0 ? `${metrics.pendingEnquiries} pending` : 'Clear',
+            value: `${safeMetrics.totalEnquiries}`,
+            badge: safeMetrics.pendingEnquiries > 0 ? `${safeMetrics.pendingEnquiries} pending` : 'Clear',
             sub: 'Contact · WhatsApp · Walk-in',
             bg: 'var(--tile-2)',
             icon: Inbox,
@@ -282,8 +295,8 @@ export const OverviewPage: React.FC = () => {
           },
           {
             label: 'Bihar Govt Updates',
-            value: `${metrics.publishedGovtUpdates}`,
-            badge: `${metrics.pendingGovtUpdates} pending`,
+            value: `${safeMetrics.publishedGovtUpdates}`,
+            badge: `${safeMetrics.pendingGovtUpdates} pending`,
             sub: 'Door 5 verified portals',
             bg: 'var(--tile-3)',
             icon: Landmark,
@@ -291,7 +304,7 @@ export const OverviewPage: React.FC = () => {
           },
           {
             label: 'Gallery Images',
-            value: `${metrics.galleryImages}`,
+            value: `${safeMetrics.galleryImages}`,
             badge: 'WebP ready',
             sub: 'Shop & work showcase',
             bg: 'var(--tile-4)',
@@ -353,13 +366,13 @@ export const OverviewPage: React.FC = () => {
             </a>
           </div>
 
-          {recentActivities.length === 0 ? (
+          {safeActivities.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">
               No administrative changes recorded yet. Actions you perform appear here immediately.
             </p>
           ) : (
             <ul className="divide-y divide-[var(--line)]">
-              {recentActivities.map((act) => (
+              {safeActivities.map((act) => (
                 <li key={act.id} className="overview-row py-2.5 first:pt-0 last:pb-0 flex items-start justify-between gap-3">
                   <div className="flex items-start gap-3 min-w-0">
                     <span className="w-8 h-8 rounded-[10px] bg-[var(--card-2)] border border-[var(--line)] flex items-center justify-center text-[var(--accent)] shrink-0 mt-0.5">
@@ -390,7 +403,7 @@ export const OverviewPage: React.FC = () => {
             <div>
               <h2 className="text-[17px] font-bold">Notifications</h2>
               <p className="text-[12.5px] text-[var(--muted)]">
-                {metrics.unreadNotifications} unread alert(s)
+                {safeMetrics.unreadNotifications} unread alert(s)
               </p>
             </div>
             <a
@@ -406,11 +419,11 @@ export const OverviewPage: React.FC = () => {
             </a>
           </div>
 
-          {notifications.length === 0 ? (
+          {safeNotifications.length === 0 ? (
             <p className="text-[13px] text-[var(--muted)]">No notifications right now.</p>
           ) : (
             <ul className="divide-y divide-[var(--line)]">
-              {notifications.slice(0, 6).map((n) => (
+              {safeNotifications.slice(0, 6).map((n) => (
                 <li key={n.id} className="overview-row py-2.5 first:pt-0 last:pb-0">
                   <button
                     type="button"

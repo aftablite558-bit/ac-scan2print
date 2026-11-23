@@ -19,66 +19,79 @@ export const dur = (sec: number): number => (reducedMotion() ? 0 : sec);
  * Computes an inset clip-path string for iris/curtain reveal animations.
  */
 export function clipInset(el: HTMLElement | null, t: number, bleed = 0): string {
-  if (!el) return 'inset(0px 0px 0px 0px round 22px)';
-  const w = el.offsetWidth || 320;
-  const h = el.offsetHeight || 160;
-  const cs = getComputedStyle(el);
-  const r = parseFloat(cs.borderTopLeftRadius) || 22;
-  const s = Math.max(0, (w / 2) * t - bleed);
-  const c = Math.max(0, (h / 2) * t - bleed);
-  const b = Math.max(0, -bleed);
-  return t === 0
-    ? `inset(${b}px ${b}px ${b}px ${b}px round ${r}px)`
-    : `inset(${c.toFixed(1)}px ${s.toFixed(1)}px ${c.toFixed(1)}px ${s.toFixed(1)}px round ${r}px)`;
+  if (!el || !el.isConnected) return 'inset(0px 0px 0px 0px round 22px)';
+  try {
+    const w = el.offsetWidth || 320;
+    const h = el.offsetHeight || 160;
+    const cs = getComputedStyle(el);
+    const r = parseFloat(cs.borderTopLeftRadius) || 22;
+    const s = Math.max(0, (w / 2) * t - bleed);
+    const c = Math.max(0, (h / 2) * t - bleed);
+    const b = Math.max(0, -bleed);
+    return t === 0
+      ? `inset(${b}px ${b}px ${b}px ${b}px round ${r}px)`
+      : `inset(${c.toFixed(1)}px ${s.toFixed(1)}px ${c.toFixed(1)}px ${s.toFixed(1)}px round ${r}px)`;
+  } catch {
+    return 'inset(0px 0px 0px 0px round 22px)';
+  }
 }
 
 /**
  * Splits a heading element's text into `.word > .ch` spans and animates characters in.
  */
 export function revealText(el: HTMLElement | null, delay = 0): gsap.core.Tween | null {
-  if (!el) return null;
+  if (!el || !el.isConnected) return null;
   if (reducedMotion()) return null;
 
   const raw = el.dataset.origText ?? el.textContent ?? '';
+  if (!raw.trim()) return null;
   el.dataset.origText = raw;
 
-  const words = raw.trim().split(/(\s+)/);
-  el.textContent = '';
+  try {
+    const words = raw.trim().split(/(\s+)/);
+    el.textContent = '';
 
-  const chars: HTMLSpanElement[] = [];
-  for (const part of words) {
-    if (!part) continue;
-    if (/^\s+$/.test(part)) {
-      el.appendChild(document.createTextNode(part));
-      continue;
+    const chars: HTMLSpanElement[] = [];
+    for (const part of words) {
+      if (!part) continue;
+      if (/^\s+$/.test(part)) {
+        el.appendChild(document.createTextNode(part));
+        continue;
+      }
+      const wordSpan = document.createElement('span');
+      wordSpan.className = 'word';
+      for (const ch of Array.from(part)) {
+        const chSpan = document.createElement('span');
+        chSpan.className = 'ch';
+        chSpan.textContent = ch;
+        wordSpan.appendChild(chSpan);
+        chars.push(chSpan);
+      }
+      el.appendChild(wordSpan);
     }
-    const wordSpan = document.createElement('span');
-    wordSpan.className = 'word';
-    for (const ch of Array.from(part)) {
-      const chSpan = document.createElement('span');
-      chSpan.className = 'ch';
-      chSpan.textContent = ch;
-      wordSpan.appendChild(chSpan);
-      chars.push(chSpan);
+
+    if (!chars.length) {
+      el.textContent = raw;
+      return null;
     }
-    el.appendChild(wordSpan);
+
+    return gsap.fromTo(
+      chars,
+      { yPercent: 115, rotation: 6 },
+      {
+        yPercent: 0,
+        rotation: 0,
+        duration: dur(0.85),
+        ease: 'power4.out',
+        stagger: dur(0.022),
+        delay: dur(delay),
+        clearProps: 'transform',
+      }
+    );
+  } catch {
+    el.textContent = raw;
+    return null;
   }
-
-  if (!chars.length) return null;
-
-  return gsap.fromTo(
-    chars,
-    { yPercent: 115, rotation: 6 },
-    {
-      yPercent: 0,
-      rotation: 0,
-      duration: dur(0.85),
-      ease: 'power4.out',
-      stagger: dur(0.022),
-      delay: dur(delay),
-      clearProps: 'transform',
-    }
-  );
 }
 
 /**
@@ -93,53 +106,62 @@ export function revealCards(
     els instanceof HTMLElement
       ? [els]
       : Array.from(els as HTMLElement[])
-  ).filter((el): el is HTMLElement => Boolean(el));
+  ).filter((el): el is HTMLElement => Boolean(el && el.isConnected));
 
   if (!list.length || reducedMotion()) return null;
 
-  const { y = 26, stagger = 0.06, delay = 0, from = 0.7 } = opts;
-  const tl = gsap.timeline({ delay: dur(delay) });
+  try {
+    const { y = 26, stagger = 0.06, delay = 0, from = 0.7 } = opts;
+    const tl = gsap.timeline({ delay: dur(delay) });
 
-  list.forEach((el, idx) => {
-    const startAt = idx * stagger;
-    tl.fromTo(
-      el,
-      { y, scale: 0.975, clipPath: clipInset(el, from) },
-      {
-        y: 0,
-        scale: 1,
-        clipPath: clipInset(el, 0, 60),
-        duration: 0.9,
-        ease: 'expo.out',
-        clearProps: 'transform,clipPath',
-      },
-      startAt
-    );
-
-    const children = Array.from(el.children).filter(
-      (ch): ch is HTMLElement =>
-        ch instanceof HTMLElement &&
-        !ch.classList.contains('nofade') &&
-        getComputedStyle(ch).position !== 'absolute'
-    );
-    if (children.length) {
+    list.forEach((el, idx) => {
+      const startAt = idx * stagger;
       tl.fromTo(
-        children,
-        { opacity: 0, y: 8 },
+        el,
+        { y, scale: 0.975, clipPath: clipInset(el, from) },
         {
-          opacity: 1,
           y: 0,
-          duration: 0.55,
-          ease: 'power3.out',
-          stagger: 0.035,
-          clearProps: 'transform,opacity',
+          scale: 1,
+          clipPath: clipInset(el, 0, 60),
+          duration: 0.9,
+          ease: 'expo.out',
+          clearProps: 'transform,clipPath',
         },
-        startAt + 0.14
+        startAt
       );
-    }
-  });
 
-  return tl;
+      const children = Array.from(el.children).filter(
+        (ch): ch is HTMLElement =>
+          ch instanceof HTMLElement &&
+          !ch.classList.contains('nofade') &&
+          getComputedStyle(ch).position !== 'absolute'
+      );
+      if (children.length) {
+        tl.fromTo(
+          children,
+          { opacity: 0, y: 8 },
+          {
+            opacity: 1,
+            y: 0,
+            duration: 0.55,
+            ease: 'power3.out',
+            stagger: 0.035,
+            clearProps: 'transform,opacity',
+          },
+          startAt + 0.14
+        );
+      }
+    });
+
+    return tl;
+  } catch {
+    list.forEach((el) => {
+      el.style.opacity = '1';
+      el.style.clipPath = '';
+      el.style.transform = '';
+    });
+    return null;
+  }
 }
 
 /**
@@ -188,23 +210,27 @@ export function revealRows(
   opts: { x?: number; y?: number; stagger?: number; delay?: number } = {}
 ): gsap.core.Tween | null {
   if (!els) return null;
-  const list = Array.from(els as HTMLElement[]).filter(Boolean);
+  const list = Array.from(els as HTMLElement[]).filter((el) => Boolean(el && el.isConnected));
   if (!list.length || reducedMotion()) return null;
-  const { x = 0, y = 12, stagger = 0.04, delay = 0 } = opts;
-  return gsap.fromTo(
-    list,
-    { opacity: 0, x, y },
-    {
-      opacity: 1,
-      x: 0,
-      y: 0,
-      duration: dur(0.55),
-      ease: 'power3.out',
-      stagger: dur(stagger),
-      delay: dur(delay),
-      clearProps: 'transform,opacity',
-    }
-  );
+  try {
+    const { x = 0, y = 12, stagger = 0.04, delay = 0 } = opts;
+    return gsap.fromTo(
+      list,
+      { opacity: 0, x, y },
+      {
+        opacity: 1,
+        x: 0,
+        y: 0,
+        duration: dur(0.55),
+        ease: 'power3.out',
+        stagger: dur(stagger),
+        delay: dur(delay),
+        clearProps: 'transform,opacity',
+      }
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -215,29 +241,33 @@ export function revealTiltCards(
   opts: { delay?: number; stagger?: number } = {}
 ): gsap.core.Tween | null {
   if (!els) return null;
-  const list = Array.from(els as HTMLElement[]).filter(Boolean);
+  const list = Array.from(els as HTMLElement[]).filter((el) => Boolean(el && el.isConnected));
   if (!list.length || reducedMotion()) return null;
-  const { delay = 0, stagger = 0.07 } = opts;
-  return gsap.fromTo(
-    list,
-    {
-      clipPath: (_i: number, el: HTMLElement) => clipInset(el, 0.6),
-      y: 40,
-      rotation: (i: number) => (i % 2 ? 2.5 : -2.5),
-      scale: 0.95,
-    },
-    {
-      clipPath: (_i: number, el: HTMLElement) => clipInset(el, 0, 60),
-      y: 0,
-      rotation: 0,
-      scale: 1,
-      duration: dur(0.85),
-      ease: 'back.out(1.4)',
-      stagger: dur(stagger),
-      delay: dur(delay),
-      clearProps: 'transform,clipPath',
-    }
-  );
+  try {
+    const { delay = 0, stagger = 0.07 } = opts;
+    return gsap.fromTo(
+      list,
+      {
+        clipPath: (_i: number, el: HTMLElement) => clipInset(el, 0.6),
+        y: 40,
+        rotation: (i: number) => (i % 2 ? 2.5 : -2.5),
+        scale: 0.95,
+      },
+      {
+        clipPath: (_i: number, el: HTMLElement) => clipInset(el, 0, 60),
+        y: 0,
+        rotation: 0,
+        scale: 1,
+        duration: dur(0.85),
+        ease: 'back.out(1.4)',
+        stagger: dur(stagger),
+        delay: dur(delay),
+        clearProps: 'transform,clipPath',
+      }
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -248,23 +278,27 @@ export function scaleAxes(
   opts: { axis?: 'x' | 'y'; delay?: number; stagger?: number; duration?: number } = {}
 ): gsap.core.Tween | null {
   if (!els) return null;
-  const list = Array.from(els as HTMLElement[]).filter(Boolean);
+  const list = Array.from(els as HTMLElement[]).filter((el) => Boolean(el && el.isConnected));
   if (!list.length || reducedMotion()) return null;
-  const { axis = 'y', delay = 0, stagger = 0.03, duration = 0.9 } = opts;
-  const prop = axis === 'x' ? 'scaleX' : 'scaleY';
-  const origin = axis === 'x' ? 'left center' : 'bottom center';
-  return gsap.fromTo(
-    list,
-    { [prop]: 0, transformOrigin: origin },
-    {
-      [prop]: 1,
-      duration: dur(duration),
-      ease: 'expo.out',
-      stagger: dur(stagger),
-      delay: dur(delay),
-      clearProps: 'transform',
-    }
-  );
+  try {
+    const { axis = 'y', delay = 0, stagger = 0.03, duration = 0.9 } = opts;
+    const prop = axis === 'x' ? 'scaleX' : 'scaleY';
+    const origin = axis === 'x' ? 'left center' : 'bottom center';
+    return gsap.fromTo(
+      list,
+      { [prop]: 0, transformOrigin: origin },
+      {
+        [prop]: 1,
+        duration: dur(duration),
+        ease: 'expo.out',
+        stagger: dur(stagger),
+        delay: dur(delay),
+        clearProps: 'transform',
+      }
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -275,22 +309,26 @@ export function popBadges(
   opts: { from?: number; delay?: number; stagger?: number } = {}
 ): gsap.core.Tween | null {
   if (!els) return null;
-  const list = Array.from(els as HTMLElement[]).filter(Boolean);
+  const list = Array.from(els as HTMLElement[]).filter((el) => Boolean(el && el.isConnected));
   if (!list.length || reducedMotion()) return null;
-  const { from = 0.6, delay = 0, stagger = 0.05 } = opts;
-  return gsap.fromTo(
-    list,
-    { scale: from, opacity: 0 },
-    {
-      scale: 1,
-      opacity: 1,
-      duration: dur(0.6),
-      ease: 'back.out(3)',
-      stagger: dur(stagger),
-      delay: dur(delay),
-      clearProps: 'transform,opacity',
-    }
-  );
+  try {
+    const { from = 0.6, delay = 0, stagger = 0.05 } = opts;
+    return gsap.fromTo(
+      list,
+      { scale: from, opacity: 0 },
+      {
+        scale: 1,
+        opacity: 1,
+        duration: dur(0.6),
+        ease: 'back.out(3)',
+        stagger: dur(stagger),
+        delay: dur(delay),
+        clearProps: 'transform,opacity',
+      }
+    );
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -421,12 +459,14 @@ export function slideClipPill(
   targetEl: HTMLElement | null,
   opts: { animate?: boolean; radius?: number; line?: boolean } = {}
 ): void {
-  if (!pillEl || !targetEl || !pillEl.parentElement) return;
+  if (!pillEl || !targetEl || !pillEl.parentElement || !pillEl.isConnected || !targetEl.isConnected) {
+    return;
+  }
   const { animate = true, radius = 14, line = false } = opts;
 
   const containerRect = pillEl.parentElement.getBoundingClientRect();
   const targetRect = targetEl.getBoundingClientRect();
-  if (!containerRect.width || !targetRect.width) return;
+  if (!containerRect.width || !targetRect.width || !containerRect.height || !targetRect.height) return;
 
   const left = Math.max(0, targetRect.left - containerRect.left);
   const right = Math.max(0, containerRect.right - targetRect.right);

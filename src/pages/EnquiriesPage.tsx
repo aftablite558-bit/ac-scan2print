@@ -46,10 +46,12 @@ export const EnquiriesPage: React.FC = () => {
     });
   }, [filter]);
 
+  const safeEnquiries = Array.isArray(enquiries) ? enquiries : [];
+
   const filtered = useMemo(() => {
-    if (filter === 'all') return enquiries;
-    return enquiries.filter((e) => e.status === filter);
-  }, [enquiries, filter]);
+    if (filter === 'all') return safeEnquiries;
+    return safeEnquiries.filter((e) => e.status === filter);
+  }, [safeEnquiries, filter]);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -130,7 +132,7 @@ export const EnquiriesPage: React.FC = () => {
         value={filter}
         onChange={setFilter}
         options={[
-          { id: 'all', label: `All (${enquiries.length})` },
+          { id: 'all', label: `All (${safeEnquiries.length})` },
           { id: 'new', label: 'New' },
           { id: 'in_progress', label: 'In Progress' },
           { id: 'resolved', label: 'Resolved' },
@@ -286,7 +288,7 @@ export const EnquiriesPage: React.FC = () => {
 
               {/* Timestamped Staff Notes */}
               <div className="space-y-2.5">
-                {item.notes.length > 0 && (
+                {Array.isArray(item.notes) && item.notes.length > 0 && (
                   <div className="space-y-2 pl-3 border-l-2 border-[var(--line-2)]">
                     {item.notes.map((n) => (
                       <div key={n.id} className="text-[12.5px]">

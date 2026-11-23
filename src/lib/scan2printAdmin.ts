@@ -42,10 +42,17 @@ export function canAccessAdminRoute(user: AdminUserSession | null): boolean {
 }
 
 export function createAdminSessionFromBackend(admin: VerifiedBackendAdmin): AdminUserSession {
+  const rawEmail = typeof admin.email === 'string' ? admin.email.trim() : '';
+  const rawName = typeof admin.fullName === 'string' ? admin.fullName.trim() : '';
+  const rawId =
+    (typeof admin.id === 'string' && admin.id.trim()) ||
+    (typeof admin.firebaseUid === 'string' && admin.firebaseUid.trim()) ||
+    'single-admin';
+
   return {
-    id: admin.id,
-    email: admin.email,
-    fullName: admin.fullName,
+    id: rawId,
+    email: rawEmail,
+    fullName: rawName || rawEmail || 'Authorized Admin',
     designation: 'Authorized Admin',
     roleId: 'single-admin',
     roleName: 'Super Admin',
@@ -154,7 +161,19 @@ export async function invokeProtectedEdgeFunction<T>(
     throw err;
   }
 
-  return (rawText ? JSON.parse(rawText) : {}) as T;
+  let parsedSuccess: unknown = {};
+  if (rawText.trim()) {
+    try {
+      parsedSuccess = JSON.parse(rawText) as unknown;
+    } catch {
+      throw new ProtectedEdgeApiError(
+        res.status || 502,
+        'INVALID_RESPONSE',
+        `Backend function ${functionName} returned invalid JSON.`
+      );
+    }
+  }
+  return parsedSuccess as T;
 }
 
 export async function verifyAdminAccessWithBackend(options: {
@@ -175,7 +194,14 @@ export async function verifyAdminAccessWithBackend(options: {
     supabaseConfig: options.supabaseConfig,
   });
 
-  if (!res.authorized || !res.admin || !res.admin.isActive) {
+  if (
+    !res ||
+    typeof res !== 'object' ||
+    !res.authorized ||
+    !res.admin ||
+    typeof res.admin !== 'object' ||
+    !res.admin.isActive
+  ) {
     const err = new ProtectedEdgeApiError(
       403,
       'FORBIDDEN',

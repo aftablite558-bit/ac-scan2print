@@ -1,6 +1,7 @@
 import React from 'react';
 import { AdminProvider, useAdmin } from './context/AdminContext';
 import { AuthScreen } from './components/AuthScreen';
+import { ErrorBoundary } from './components/ErrorBoundary';
 import { Shell } from './components/Shell';
 import { Overlays } from './components/Overlays';
 import { canAccessAdminRoute } from './lib/scan2printAdmin';
@@ -47,7 +48,7 @@ const ActiveRouteView: React.FC = () => {
 };
 
 const RootGate: React.FC = () => {
-  const { authLoading, currentUser, appearance } = useAdmin();
+  const { authLoading, currentUser, appearance, route, navigate, logout } = useAdmin();
 
   if (authLoading) {
     return (
@@ -70,27 +71,44 @@ const RootGate: React.FC = () => {
 
   if (!canAccessAdminRoute(currentUser)) {
     return (
-      <>
+      <ErrorBoundary
+        variant="fullscreen"
+        onReturnOverview={() => navigate('#/home')}
+        onSignOut={logout}
+      >
         <AuthScreen />
         <Overlays />
-      </>
+      </ErrorBoundary>
     );
   }
 
   return (
-    <>
+    <ErrorBoundary
+      variant="fullscreen"
+      onReturnOverview={() => navigate('#/home')}
+      onSignOut={logout}
+    >
       <Shell>
-        <ActiveRouteView />
+        <ErrorBoundary
+          variant="inline"
+          resetKey={`${route.main}:${route.sub ?? ''}`}
+          onReturnOverview={() => navigate('#/home')}
+          onSignOut={logout}
+        >
+          <ActiveRouteView />
+        </ErrorBoundary>
       </Shell>
       <Overlays />
-    </>
+    </ErrorBoundary>
   );
 };
 
 export default function App() {
   return (
-    <AdminProvider>
-      <RootGate />
-    </AdminProvider>
+    <ErrorBoundary variant="fullscreen">
+      <AdminProvider>
+        <RootGate />
+      </AdminProvider>
+    </ErrorBoundary>
   );
 }

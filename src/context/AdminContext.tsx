@@ -7,7 +7,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { apiRequest } from '../lib/api';
+import { ApiError, apiRequest } from '../lib/api';
 import {
   getCurrentFirebaseIdToken,
   initFirebaseTelemetry,
@@ -19,8 +19,10 @@ import {
   subscribeFirebaseAuthState,
 } from '../lib/firebase';
 import {
+  canAccessAdminRoute,
   createAdminSessionFromBackend,
   invokeProtectedEdgeFunction,
+  ProtectedEdgeApiError,
   verifyAdminAccessWithBackend,
 } from '../lib/scan2printAdmin';
 import { isSupabaseClientConfigured, subscribeAdminRealtime } from '../lib/supabase';
@@ -53,13 +55,24 @@ import type {
   WebsiteSettings,
 } from '../types/admin';
 import {
-  DEFAULT_APPEARANCE,
   getPageTitle,
   hasPermission,
   parseHash,
   type ParsedRoute,
 } from '../utils/adminLogic';
 import { performThemeTransition } from '../utils/animations';
+import {
+  EMPTY_ACCESS_STATE,
+  EMPTY_DASHBOARD_METRICS,
+  normalizeAccessStatePayload,
+  normalizeCmsStatePayload,
+  normalizeDashboardOverviewPayload,
+  normalizeEnquiriesPayload,
+  normalizeGovtStatePayload,
+  parseAppearanceSettings,
+  parseLocationRoute,
+  sanitizeErrorMessage,
+} from '../utils/workspaceState';
 
 const APPEARANCE_KEY = 'aman-computer-appearance-v1';
 
@@ -195,37 +208,15 @@ interface AdminContextValue {
   exportDatabaseJson: () => Promise<void>;
 }
 
-const EMPTY_METRICS: DashboardMetrics = {
-  totalServices: 0,
-  publishedServices: 0,
-  totalEnquiries: 0,
-  pendingEnquiries: 0,
-  publishedGovtUpdates: 0,
-  pendingGovtUpdates: 0,
-  galleryImages: 0,
-  unreadNotifications: 0,
-};
-
-const EMPTY_ACCESS: AccessStateSnapshot = {
-  roles: [],
-  permissions: [],
-  rolePermissions: [],
-  users: [],
-  loginLogs: [],
-  auditLogs: [],
-};
+const EMPTY_METRICS: DashboardMetrics = EMPTY_DASHBOARD_METRICS;
+const EMPTY_ACCESS: AccessStateSnapshot = EMPTY_ACCESS_STATE;
 
 function loadAppearance(): AppearanceSettings {
   try {
-    const raw = localStorage.getItem(APPEARANCE_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<AppearanceSettings>;
-      return { ...DEFAULT_APPEARANCE, ...parsed };
-    }
+    return parseAppearanceSettings(localStorage.getItem(APPEARANCE_KEY));
   } catch {
-    // ignore storage errors
+    return parseAppearanceSettings(null);
   }
-  return DEFAULT_APPEARANCE;
 }
 
 const AdminContext = createContext<AdminContextValue | null>(null);
@@ -243,7 +234,13 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     geminiConfigured: false,
   });
   const [currentUser, setCurrentUser] = useState<AdminUserSession | null>(null);
-  const verifyingUidRef = useRef<string | null>(null);
+  const currentUserRef = useRef<AdminUserSession | null>(null);
+  const loadedWorkspaceUidRef = useRef<string | null>(null);
+  const inFlightVerifyRef = useRef<{
+    uid: string;
+    promise: Promise<AdminUserSession>;
+  } | null>(null);
+  const loggedStaticFallbackRef = useRef(false);
   const [appearance, setAppearance] = useState<AppearanceSettings>(loadAppearance);
   const [systemDark, setSystemDark] = useState<boolean>(() =>
     typeof window !== 'undefined'
@@ -251,7 +248,10 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       : true
   );
   const [route, setRoute] = useState<ParsedRoute>(() =>
-    parseHash(typeof window !== 'undefined' ? window.location.hash : '#/home')
+    parseLocationRoute(
+      typeof window !== 'undefined' ? window.location.hash : '#/home',
+      typeof window !== 'undefined' ? window.location.pathname : ''
+    )
   );
   const [modal, setModal] = useState<ModalState>(null);
   const [toast, setToast] = useState<ToastState | null>(null);
@@ -328,13 +328,17 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     );
   }, [resolvedTheme, appearance.frost]);
 
-  // Hash routing
+  // Hash + path routing
   useEffect(() => {
-    const onHashChange = () => {
-      setRoute(parseHash(window.location.hash));
+    const onLocationChange = () => {
+      setRoute(parseLocationRoute(window.location.hash, window.location.pathname));
     };
-    window.addEventListener('hashchange', onHashChange);
-    return () => window.removeEventListener('hashchange', onHashChange);
+    window.addEventListener('hashchange', onLocationChange);
+    window.addEventListener('popstate', onLocationChange);
+    return () => {
+      window.removeEventListener('hashchange', onLocationChange);
+      window.removeEventListener('popstate', onLocationChange);
+    };
   }, []);
 
   useEffect(() => {
@@ -383,74 +387,119 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     [currentUser]
   );
 
+  const verifyFirebaseSession = useCallback(
+    async (
+      uid: string,
+      getIdToken: (forceRefresh?: boolean) => Promise<string | null>
+    ): Promise<AdminUserSession> => {
+      const existing = inFlightVerifyRef.current;
+      if (existing && existing.uid === uid) {
+        return existing.promise;
+      }
+
+      const promise = (async () => {
+        const verified = await verifyAdminAccessWithBackend({ getIdToken });
+        const sessionUser = createAdminSessionFromBackend(verified.admin);
+        if (!canAccessAdminRoute(sessionUser)) {
+          throw new ProtectedEdgeApiError(
+            403,
+            'FORBIDDEN',
+            'Admin session has no active dashboard permissions.'
+          );
+        }
+        return sessionUser;
+      })().finally(() => {
+        if (inFlightVerifyRef.current?.promise === promise) {
+          inFlightVerifyRef.current = null;
+        }
+      });
+
+      inFlightVerifyRef.current = { uid, promise };
+      return promise;
+    },
+    []
+  );
+
   const loadWorkspaceData = useCallback(async (user: AdminUserSession) => {
     setDataLoading(true);
     try {
-      const [overviewRes, cmsRes, accessRes] = await Promise.all([
-        apiRequest<{ metrics: DashboardMetrics; recentActivities: ActivityLogEntry[] }>(
-          '/dashboard/overview'
-        ),
-        apiRequest<{
-          businessProfile: BusinessProfile;
-          heroSection: HeroSection;
-          ownerProfile: OwnerProfile;
-          websiteSettings: WebsiteSettings;
-          serviceCategories: ServiceCategory[];
-          services: ServiceItem[];
-          galleryItems: GalleryItem[];
-          testimonials: TestimonialItem[];
-          faqs: FaqItem[];
-          referencePortraits: ReferencePortrait[];
-          notifications: AdminNotification[];
-        }>('/cms/state'),
-        apiRequest<AccessStateSnapshot>('/access/state'),
+      const overviewPromise = apiRequest('/dashboard/overview');
+      const cmsPromise = apiRequest('/cms/state');
+      const accessPromise = apiRequest('/access/state');
+      const enquiriesPromise = hasPermission(user, 'enquiries.read')
+        ? apiRequest('/enquiries')
+        : Promise.resolve({ enquiries: [] });
+      const govtPromise = hasPermission(user, 'govt.read')
+        ? apiRequest('/govt/state')
+        : Promise.resolve({ sources: [], updates: [], fetchLogs: [] });
+
+      const [overviewRes, cmsRes, accessRes, enquiriesRes, govtRes] = await Promise.allSettled([
+        overviewPromise,
+        cmsPromise,
+        accessPromise,
+        enquiriesPromise,
+        govtPromise,
       ]);
 
-      setMetrics(overviewRes.metrics);
-      setRecentActivities(overviewRes.recentActivities);
-      setBusinessProfile(cmsRes.businessProfile);
-      setHeroSection(cmsRes.heroSection);
-      setOwnerProfile(cmsRes.ownerProfile);
-      setWebsiteSettings(cmsRes.websiteSettings);
-      setServiceCategories(cmsRes.serviceCategories);
-      setServices(cmsRes.services);
-      setGalleryItems(cmsRes.galleryItems);
-      setTestimonials(cmsRes.testimonials);
-      setFaqs(cmsRes.faqs);
-      setReferencePortraits(cmsRes.referencePortraits);
-      setNotifications(cmsRes.notifications);
-      setAccessState(accessRes);
+      if (overviewRes.status === 'fulfilled') {
+        const normalized = normalizeDashboardOverviewPayload(overviewRes.value);
+        setMetrics(normalized.metrics);
+        setRecentActivities(normalized.recentActivities);
+      }
 
-      const parallelOptional: Promise<void>[] = [];
-      if (hasPermission(user, 'enquiries.read')) {
-        parallelOptional.push(
-          apiRequest<{ enquiries: EnquiryItem[] }>('/enquiries').then((r) =>
-            setEnquiries(r.enquiries)
-          )
-        );
-      } else {
-        setEnquiries([]);
+      if (cmsRes.status === 'fulfilled') {
+        const normalized = normalizeCmsStatePayload(cmsRes.value);
+        setBusinessProfile(normalized.businessProfile);
+        setHeroSection(normalized.heroSection);
+        setOwnerProfile(normalized.ownerProfile);
+        setWebsiteSettings(normalized.websiteSettings);
+        setServiceCategories(normalized.serviceCategories);
+        setServices(normalized.services);
+        setGalleryItems(normalized.galleryItems);
+        setTestimonials(normalized.testimonials);
+        setFaqs(normalized.faqs);
+        setReferencePortraits(normalized.referencePortraits);
+        setNotifications(normalized.notifications);
       }
-      if (hasPermission(user, 'govt.read')) {
-        parallelOptional.push(
-          apiRequest<{
-            sources: GovtSource[];
-            updates: GovtUpdateItem[];
-            fetchLogs: GovtFetchLog[];
-          }>('/govt/state').then((r) => {
-            setGovtSources(r.sources);
-            setGovtUpdates(r.updates);
-            setGovtFetchLogs(r.fetchLogs);
-          })
-        );
-      } else {
-        setGovtSources([]);
-        setGovtUpdates([]);
-        setGovtFetchLogs([]);
+
+      if (accessRes.status === 'fulfilled') {
+        setAccessState(normalizeAccessStatePayload(accessRes.value));
       }
-      await Promise.all(parallelOptional);
-    } catch {
-      // Static Firebase Hosting runs without Express /api/* CMS routes; keep clean empty defaults
+
+      if (enquiriesRes.status === 'fulfilled') {
+        setEnquiries(normalizeEnquiriesPayload(enquiriesRes.value));
+      }
+
+      if (govtRes.status === 'fulfilled') {
+        const normalized = normalizeGovtStatePayload(govtRes.value);
+        setGovtSources(normalized.sources);
+        setGovtUpdates(normalized.updates);
+        setGovtFetchLogs(normalized.fetchLogs);
+      }
+
+      const settled = [overviewRes, cmsRes, accessRes, enquiriesRes, govtRes];
+      for (const result of settled) {
+        if (result.status !== 'rejected') continue;
+        const reason = result.reason;
+        if (reason instanceof ApiError && (reason.isNonJson || reason.status === 404)) {
+          if (!loggedStaticFallbackRef.current) {
+            loggedStaticFallbackRef.current = true;
+            console.info(
+              '[AMAN COMPUTER Admin] Local Express CMS endpoints (/api/*) are inactive on static Firebase Hosting; operating in Supabase Edge + Firebase mode.'
+            );
+          }
+        } else {
+          console.error(
+            '[AMAN COMPUTER Admin] Workspace loader error:',
+            sanitizeErrorMessage(reason, 'Failed to load optional CMS workspace data.')
+          );
+        }
+      }
+    } catch (err) {
+      console.error(
+        '[AMAN COMPUTER Admin] Unexpected workspace load error:',
+        sanitizeErrorMessage(err)
+      );
     } finally {
       setDataLoading(false);
     }
@@ -466,51 +515,60 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
     let active = true;
 
     const handleBackendUnauthorized = async (message?: string) => {
-      verifyingUidRef.current = null;
+      inFlightVerifyRef.current = null;
+      loadedWorkspaceUidRef.current = null;
+      currentUserRef.current = null;
       await signOutFirebase().catch(() => {});
       if (!active) return;
       setCurrentUser(null);
       setModal(null);
-      if (message) setAuthError(message);
+      if (message) {
+        setAuthError(sanitizeErrorMessage(message));
+      }
     };
 
     const unsubscribe = subscribeFirebaseAuthState((firebaseUser) => {
       if (!active) return;
 
       if (!firebaseUser) {
-        verifyingUidRef.current = null;
+        inFlightVerifyRef.current = null;
+        loadedWorkspaceUidRef.current = null;
+        currentUserRef.current = null;
         setCurrentUser(null);
         setAuthLoading(false);
         return;
       }
 
-      if (verifyingUidRef.current === firebaseUser.uid) {
-        return;
-      }
-      verifyingUidRef.current = firebaseUser.uid;
+      const alreadyLoadedForUid =
+        currentUserRef.current !== null && loadedWorkspaceUidRef.current === firebaseUser.uid;
 
       void (async () => {
         try {
-          const verified = await verifyAdminAccessWithBackend({
-            getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
-            onUnauthorized: async (err) => {
-              await handleBackendUnauthorized(err.message);
-            },
-          });
+          const sessionUser = await verifyFirebaseSession(firebaseUser.uid, (forceRefresh) =>
+            firebaseUser.getIdToken(forceRefresh)
+          );
           if (!active) return;
-          const sessionUser = createAdminSessionFromBackend(verified.admin);
+          currentUserRef.current = sessionUser;
           setAuthError(null);
           setCurrentUser(sessionUser);
-          await loadWorkspaceData(sessionUser);
+
+          if (!alreadyLoadedForUid && loadedWorkspaceUidRef.current !== firebaseUser.uid) {
+            loadedWorkspaceUidRef.current = firebaseUser.uid;
+            await loadWorkspaceData(sessionUser);
+          }
         } catch (err) {
           if (!active) return;
-          const msg =
-            err instanceof Error
-              ? err.message
-              : 'Supabase backend rejected Admin authorization for this Firebase account.';
-          await handleBackendUnauthorized(msg);
+          const sanitized = sanitizeErrorMessage(
+            err,
+            'Supabase backend rejected Admin authorization for this Firebase account.'
+          );
+          console.error('[AMAN COMPUTER Admin Auth]', sanitized);
+          const isAuthRejection =
+            err instanceof ProtectedEdgeApiError && (err.status === 401 || err.status === 403);
+          if (!alreadyLoadedForUid || isAuthRejection) {
+            await handleBackendUnauthorized(sanitized);
+          }
         } finally {
-          verifyingUidRef.current = null;
           if (active) setAuthLoading(false);
         }
       })();
@@ -527,8 +585,14 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
           });
         }
       })
-      .catch(() => {
-        // Static Firebase Hosting does not expose /api/auth/bootstrap-status
+      .catch((err) => {
+        if (err instanceof ApiError && (err.isNonJson || err.status === 404)) {
+          return;
+        }
+        console.info(
+          '[AMAN COMPUTER Admin] Bootstrap status check skipped:',
+          sanitizeErrorMessage(err)
+        );
       });
 
     void initFirebaseTelemetry();
@@ -537,7 +601,7 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       active = false;
       unsubscribe();
     };
-  }, [loadWorkspaceData]);
+  }, [loadWorkspaceData, verifyFirebaseSession]);
 
   // Optional Supabase Realtime Sync
   useEffect(() => {
@@ -595,31 +659,40 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
       setAuthError(null);
       const firebaseUser = await signInWithFirebaseEmailPassword(email, password, rememberSession);
       try {
-        const verified = await verifyAdminAccessWithBackend({
-          getIdToken: (forceRefresh) => firebaseUser.getIdToken(forceRefresh),
-        });
-        const sessionUser = createAdminSessionFromBackend(verified.admin);
+        const sessionUser = await verifyFirebaseSession(firebaseUser.uid, (forceRefresh) =>
+          firebaseUser.getIdToken(forceRefresh)
+        );
+        currentUserRef.current = sessionUser;
         setAuthError(null);
         setCurrentUser(sessionUser);
-        await loadWorkspaceData(sessionUser);
+        if (loadedWorkspaceUidRef.current !== firebaseUser.uid) {
+          loadedWorkspaceUidRef.current = firebaseUser.uid;
+          await loadWorkspaceData(sessionUser);
+        }
         showToast(`Signed in as ${sessionUser.fullName}`);
       } catch (err) {
+        inFlightVerifyRef.current = null;
+        loadedWorkspaceUidRef.current = null;
+        currentUserRef.current = null;
         await signOutFirebase().catch(() => {});
         setCurrentUser(null);
-        const msg =
-          err instanceof Error
-            ? err.message
-            : 'Unauthorized: Supabase backend rejected Admin access.';
+        const msg = sanitizeErrorMessage(
+          err,
+          'Unauthorized: Supabase backend rejected Admin access.'
+        );
+        console.error('[AMAN COMPUTER Admin Login]', msg);
         setAuthError(msg);
         throw new Error(msg);
       }
     },
-    [loadWorkspaceData, showToast]
+    [loadWorkspaceData, showToast, verifyFirebaseSession]
   );
 
   const logout = useCallback(async () => {
-    verifyingUidRef.current = null;
-    await signOutFirebase();
+    inFlightVerifyRef.current = null;
+    loadedWorkspaceUidRef.current = null;
+    currentUserRef.current = null;
+    await signOutFirebase().catch(() => {});
     await apiRequest<{ ok: boolean }>('/auth/logout', { method: 'POST' }).catch(() => {});
     setCurrentUser(null);
     setAuthError(null);
@@ -643,10 +716,13 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         body,
         getIdToken: (forceRefresh) => getCurrentFirebaseIdToken(Boolean(forceRefresh)),
         onUnauthorized: async (err) => {
+          inFlightVerifyRef.current = null;
+          loadedWorkspaceUidRef.current = null;
+          currentUserRef.current = null;
           await signOutFirebase().catch(() => {});
           setCurrentUser(null);
           setModal(null);
-          setAuthError(err.message);
+          setAuthError(sanitizeErrorMessage(err));
         },
       });
     },
@@ -932,8 +1008,9 @@ export const AdminProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         body: JSON.stringify(sourceId ? { sourceId } : {}),
       });
       await refreshAll();
-      const totalInserted = res.results.reduce((s, r) => s + r.itemsInserted, 0);
-      const errors = res.results.filter((r) => r.status === 'error').length;
+      const results = Array.isArray(res?.results) ? res.results : [];
+      const totalInserted = results.reduce((s, r) => s + (r?.itemsInserted || 0), 0);
+      const errors = results.filter((r) => r?.status === 'error').length;
       if (errors > 0 && totalInserted === 0) {
         showToast(`Fetch finished with ${errors} portal error(s); check Fetch Logs`, 'bad');
       } else {

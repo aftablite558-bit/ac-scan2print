@@ -36,6 +36,7 @@ import {
   reducedMotion,
   slideClipPill,
 } from '../utils/animations';
+import { EMPTY_DASHBOARD_METRICS } from '../utils/workspaceState';
 
 export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const {
@@ -99,7 +100,9 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     return () => document.removeEventListener('mousedown', onDocClick);
   }, []);
 
-  const unreadNotifs = notifications.filter((n) => !n.is_read).length;
+  const safeNotifications = Array.isArray(notifications) ? notifications : [];
+  const safeMetrics = metrics ?? EMPTY_DASHBOARD_METRICS;
+  const unreadNotifs = safeNotifications.filter((n) => !n.is_read).length;
   const isCollapsed = appearance.collapsedRail;
   const brandName = businessProfile?.business_name || 'AMAN COMPUTER';
   const brandSubtitle = businessProfile?.dashboard_subtitle || 'Admin Dashboard';
@@ -458,14 +461,14 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
           label: 'Enquiries',
           href: '#/enquiries',
           icon: Inbox,
-          badge: metrics.pendingEnquiries > 0 ? metrics.pendingEnquiries : undefined,
+          badge: safeMetrics.pendingEnquiries > 0 ? safeMetrics.pendingEnquiries : undefined,
         },
         {
           id: 'bihar-updates',
           label: 'Bihar Updates',
           href: '#/bihar-updates',
           icon: Landmark,
-          badge: metrics.pendingGovtUpdates > 0 ? metrics.pendingGovtUpdates : undefined,
+          badge: safeMetrics.pendingGovtUpdates > 0 ? safeMetrics.pendingGovtUpdates : undefined,
         },
         { id: 'access', label: 'Access & Audit', href: '#/access', icon: Shield },
       ],
@@ -953,12 +956,12 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
                       </button>
                     </div>
                     <div className="space-y-1 max-h-[340px] overflow-y-auto custom-scroll">
-                      {notifications.length === 0 ? (
+                      {safeNotifications.length === 0 ? (
                         <div className="p-3 text-[12.5px] text-[var(--muted)]">
                           No administrative notifications yet.
                         </div>
                       ) : (
-                        notifications.map((n) => (
+                        safeNotifications.map((n) => (
                           <button
                             key={n.id}
                             type="button"

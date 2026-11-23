@@ -195,6 +195,36 @@ export const BusinessCmsPage: React.FC = () => {
         ]}
       />
 
+      {((activeTab === 'business' && !bizForm) ||
+        (activeTab === 'hero' && !heroForm) ||
+        (activeTab === 'website' && !webForm)) && (
+        <section className="anim-card glass-pane rounded-[24px] p-6 max-w-[920px] space-y-3">
+          <h2 className="text-[17px] font-bold">Local CMS Backend Not Active</h2>
+          <p className="text-[13.5px] text-[var(--muted)] leading-relaxed">
+            Business Profile, Hero Section, and Website SEO records load from the optional local Express CMS API (
+            <code>/api/cms/state</code>). On static Firebase Hosting, manage printers and QR print payment settings in{' '}
+            <strong className="text-[var(--ink)]">Hardware &amp; Printers</strong> or display preferences in{' '}
+            <strong className="text-[var(--ink)]">Settings</strong>.
+          </p>
+          <div className="flex flex-wrap gap-2.5 pt-1">
+            <button
+              type="button"
+              onClick={() => navigate('#/hardware')}
+              className="btn-primary px-4 py-2 rounded-full text-[13px] cursor-pointer"
+            >
+              Open Hardware &amp; Printers
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('#/settings')}
+              className="btn-ghost px-4 py-2 rounded-full text-[13px] cursor-pointer"
+            >
+              Open Settings
+            </button>
+          </div>
+        </section>
+      )}
+
       {/* Business Profile Tab */}
       {activeTab === 'business' && bizForm && (
         <form onSubmit={handleSaveBusiness} className="space-y-4 max-w-[920px]">
