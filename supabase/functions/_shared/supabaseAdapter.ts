@@ -271,6 +271,16 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       return (data ?? []) as PrintJob[];
     },
 
+    async listPrintJobs() {
+      const { data, error } = await adminClient
+        .from('print_jobs')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1000);
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintJob[];
+    },
+
     async countActiveFilesForJob(jobId: string) {
       const { count, error } = await adminClient
         .from('print_files')
@@ -323,6 +333,108 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
         .order('created_at', { ascending: true });
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
       return (data ?? []) as PrintPayment[];
+    },
+
+    async listAllPayments() {
+      const { data, error } = await adminClient
+        .from('print_payments')
+        .select('*')
+        .order('created_at', { ascending: false })
+        .limit(1500);
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return ((data ?? []) as PrintPayment[]).map((p) => ({
+        ...p,
+        amount: Number(p.amount),
+      }));
+    },
+
+    async listPricingRules() {
+      const { data, error } = await adminClient
+        .from('print_pricing_rules')
+        .select('*')
+        .order('paper_size', { ascending: true })
+        .order('print_mode', { ascending: true })
+        .order('print_sides', { ascending: true });
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return ((data ?? []) as PrintPricingRule[]).map((r) => ({
+        ...r,
+        rate: Number(r.rate),
+        minimum_charge: Number(r.minimum_charge),
+      }));
+    },
+
+    async getPricingRuleById(ruleId: string) {
+      const { data, error } = await adminClient
+        .from('print_pricing_rules')
+        .select('*')
+        .eq('id', ruleId)
+        .maybeSingle();
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      if (!data) return null;
+      const rule = data as PrintPricingRule;
+      return {
+        ...rule,
+        rate: Number(rule.rate),
+        minimum_charge: Number(rule.minimum_charge),
+      };
+    },
+
+    async createPricingRule(input) {
+      const { data, error } = await adminClient
+        .from('print_pricing_rules')
+        .insert({
+          rule_name: input.ruleName,
+          paper_size: input.paperSize,
+          print_mode: input.printMode,
+          print_sides: input.printSides,
+          pricing_unit: input.pricingUnit,
+          rate: input.rate,
+          minimum_charge: input.minimumCharge,
+          is_active: input.isActive,
+        })
+        .select('*')
+        .single();
+      if (error) {
+        if (error.code === '23505') {
+          throw new AppError(
+            409,
+            'ACTIVE_PRICING_RULE_CONFLICT',
+            'Another active pricing rule already exists for this Paper Size + Print Mode + Sides combination.'
+          );
+        }
+        throw new AppError(500, 'DB_ERROR', error.message);
+      }
+      const rule = data as PrintPricingRule;
+      return {
+        ...rule,
+        rate: Number(rule.rate),
+        minimum_charge: Number(rule.minimum_charge),
+      };
+    },
+
+    async updatePricingRule(ruleId: string, patch: Partial<PrintPricingRule>) {
+      const { data, error } = await adminClient
+        .from('print_pricing_rules')
+        .update({ ...patch, updated_at: new Date().toISOString() })
+        .eq('id', ruleId)
+        .select('*')
+        .single();
+      if (error) {
+        if (error.code === '23505') {
+          throw new AppError(
+            409,
+            'ACTIVE_PRICING_RULE_CONFLICT',
+            'Another active pricing rule already exists for this Paper Size + Print Mode + Sides combination.'
+          );
+        }
+        throw new AppError(500, 'DB_ERROR', error.message);
+      }
+      const rule = data as PrintPricingRule;
+      return {
+        ...rule,
+        rate: Number(rule.rate),
+        minimum_charge: Number(rule.minimum_charge),
+      };
     },
 
     async getPaymentById(paymentId: string) {
@@ -547,6 +659,16 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       return (data ?? []) as PrintJobAttempt[];
     },
 
+    async listAttemptsForJob(jobId: string) {
+      const { data, error } = await adminClient
+        .from('print_job_attempts')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('attempt_number', { ascending: false });
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintJobAttempt[];
+    },
+
     async getAttemptById(attemptId: string) {
       const { data, error } = await adminClient
         .from('print_job_attempts')
@@ -608,6 +730,16 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
         query = query.in('event_type', eventTypes);
       }
       const { data, error } = await query;
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintEvent[];
+    },
+
+    async listEventsForJob(jobId: string) {
+      const { data, error } = await adminClient
+        .from('print_events')
+        .select('*')
+        .eq('job_id', jobId)
+        .order('created_at', { ascending: true });
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
       return (data ?? []) as PrintEvent[];
     },

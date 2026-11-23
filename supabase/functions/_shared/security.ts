@@ -336,6 +336,12 @@ export function parseAndValidatePageRange(
   };
 }
 
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export function isValidUuid(value: unknown): value is string {
+  return typeof value === 'string' && UUID_REGEX.test(value.trim());
+}
+
 export function getClientIp(req: Request): string {
   const xff = req.headers.get('x-forwarded-for');
   if (xff) {
@@ -346,26 +352,27 @@ export function getClientIp(req: Request): string {
 }
 
 export function buildCorsHeaders(req: Request, allowedOriginsRaw?: string): Record<string, string> {
-  const reqOrigin = req.headers.get('origin') ?? '';
+  const reqOrigin = (req.headers.get('origin') ?? '').trim();
   const allowedList = (allowedOriginsRaw ?? '')
     .split(',')
     .map((s) => s.trim())
     .filter(Boolean);
 
-  const allowOrigin =
-    allowedList.length === 0
-      ? reqOrigin || '*'
-      : allowedList.includes(reqOrigin)
-        ? reqOrigin
-        : allowedList[0];
-
-  return {
-    'Access-Control-Allow-Origin': allowOrigin,
+  const headers: Record<string, string> = {
     'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
     'Access-Control-Allow-Headers':
       'authorization, x-client-info, apikey, content-type, x-tracking-token, x-draft-secret, x-admin-bootstrap-secret, x-cron-secret, x-device-credential',
     'Vary': 'Origin',
   };
+
+  // Fail closed: emit Access-Control-Allow-Origin ONLY when ALLOWED_ORIGINS is configured
+  // and the request Origin explicitly matches an allowed origin.
+  // Never reflect arbitrary origins or emit wildcard '*' fallback.
+  if (allowedList.length > 0 && reqOrigin && allowedList.includes(reqOrigin)) {
+    headers['Access-Control-Allow-Origin'] = reqOrigin;
+  }
+
+  return headers;
 }
 
 export function jsonResponse(

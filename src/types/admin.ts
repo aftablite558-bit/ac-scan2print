@@ -3,6 +3,7 @@ export type WallpaperId = 'wall-dusk' | 'wall-street' | 'wall-room';
 
 export type MainRoute =
   | 'home'
+  | 'print-management'
   | 'hardware'
   | 'cms'
   | 'enquiries'
@@ -10,6 +11,8 @@ export type MainRoute =
   | 'access'
   | 'settings'
   | 'help';
+
+export type PrintManagementTab = 'jobs' | 'queue' | 'devices' | 'pricing';
 
 export type CmsTab =
   | 'business'

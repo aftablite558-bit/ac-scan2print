@@ -63,6 +63,9 @@ verify_jwt = false
 [functions.admin-bootstrap]
 verify_jwt = false
 
+[functions.admin-print-jobs]
+verify_jwt = false
+
 [functions.admin-review-print-job]
 verify_jwt = false
 

@@ -7,6 +7,7 @@ import {
   Landmark,
   Layers,
   Palette,
+  Printer,
   ShieldCheck,
   Sliders,
 } from 'lucide-react';
@@ -96,7 +97,18 @@ export const OverviewPage: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5 shrink-0">
+        <div className="flex flex-wrap items-center gap-2.5 shrink-0">
+          <button
+            type="button"
+            onClick={(e) => {
+              popIcon(e.currentTarget);
+              navigate('#/print-management/jobs');
+            }}
+            className="btn-primary px-4 py-2 rounded-full text-[13.5px] font-semibold flex items-center gap-2 cursor-pointer"
+          >
+            <Printer size={15} />
+            <span>Print Management</span>
+          </button>
           <button
             type="button"
             onClick={(e) => {

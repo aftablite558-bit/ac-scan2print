@@ -334,6 +334,12 @@ export class TestSupabaseSimulator {
         return sim.jobs.map((j) => ({ ...j }));
       },
 
+      async listPrintJobs() {
+        return [...sim.jobs]
+          .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+          .map((j) => ({ ...j }));
+      },
+
       async countActiveFilesForJob(jobId: string) {
         return sim.files.filter((f) => f.job_id === jobId && f.deleted_at === null).length;
       },
@@ -371,6 +377,83 @@ export class TestSupabaseSimulator {
 
       async getPaymentsForJob(jobId: string) {
         return sim.payments.filter((p) => p.job_id === jobId).map((p) => ({ ...p }));
+      },
+
+      async listAllPayments() {
+        return sim.payments.map((p) => ({ ...p }));
+      },
+
+      async listPricingRules() {
+        return sim.pricingRules.map((r) => ({ ...r }));
+      },
+
+      async getPricingRuleById(ruleId: string) {
+        const found = sim.pricingRules.find((r) => r.id === ruleId);
+        return found ? { ...found } : null;
+      },
+
+      async createPricingRule(input) {
+        if (input.printSides === 'duplex' && input.pricingUnit !== 'per_physical_sheet') {
+          throw new AppError(500, 'DB_CONSTRAINT', 'chk_duplex_uses_per_physical_sheet violation');
+        }
+        if (input.isActive) {
+          const conflict = sim.pricingRules.find(
+            (r) =>
+              r.is_active &&
+              r.paper_size === input.paperSize &&
+              r.print_mode === input.printMode &&
+              r.print_sides === input.printSides
+          );
+          if (conflict) {
+            throw new AppError(409, 'ACTIVE_PRICING_RULE_CONFLICT', 'idx_print_pricing_rules_active_unique violation');
+          }
+        }
+        const nowIso = new Date(sim.nowMs).toISOString();
+        const rule: PrintPricingRule = {
+          id: crypto.randomUUID(),
+          rule_name: input.ruleName,
+          paper_size: input.paperSize,
+          print_mode: input.printMode,
+          print_sides: input.printSides,
+          pricing_unit: input.pricingUnit,
+          rate: input.rate,
+          minimum_charge: input.minimumCharge,
+          is_active: input.isActive,
+          valid_from: nowIso,
+          valid_until: null,
+          created_at: nowIso,
+          updated_at: nowIso,
+        };
+        sim.pricingRules.push(rule);
+        return { ...rule };
+      },
+
+      async updatePricingRule(ruleId: string, patch: Partial<PrintPricingRule>) {
+        const idx = sim.pricingRules.findIndex((r) => r.id === ruleId);
+        if (idx === -1) throw new AppError(404, 'RULE_NOT_FOUND', 'Pricing rule not found.');
+        const next: PrintPricingRule = {
+          ...sim.pricingRules[idx],
+          ...patch,
+          updated_at: new Date(sim.nowMs).toISOString(),
+        };
+        if (next.print_sides === 'duplex' && next.pricing_unit !== 'per_physical_sheet') {
+          throw new AppError(500, 'DB_CONSTRAINT', 'chk_duplex_uses_per_physical_sheet violation');
+        }
+        if (next.is_active) {
+          const conflict = sim.pricingRules.find(
+            (r) =>
+              r.id !== ruleId &&
+              r.is_active &&
+              r.paper_size === next.paper_size &&
+              r.print_mode === next.print_mode &&
+              r.print_sides === next.print_sides
+          );
+          if (conflict) {
+            throw new AppError(409, 'ACTIVE_PRICING_RULE_CONFLICT', 'idx_print_pricing_rules_active_unique violation');
+          }
+        }
+        sim.pricingRules[idx] = next;
+        return { ...next };
       },
 
       async getPaymentById(paymentId: string) {
@@ -571,6 +654,13 @@ export class TestSupabaseSimulator {
         return sim.attempts.filter((a) => a.job_id === jobId && a.finished_at === null).map((a) => ({ ...a }));
       },
 
+      async listAttemptsForJob(jobId: string) {
+        return sim.attempts
+          .filter((a) => a.job_id === jobId)
+          .sort((a, b) => b.attempt_number - a.attempt_number)
+          .map((a) => ({ ...a }));
+      },
+
       async getAttemptById(attemptId: string) {
         const found = sim.attempts.find((a) => a.id === attemptId);
         return found ? { ...found } : null;
@@ -710,6 +800,13 @@ export class TestSupabaseSimulator {
         return [...filtered]
           .sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
           .slice(0, limit)
+          .map((e) => ({ ...e }));
+      },
+
+      async listEventsForJob(jobId: string) {
+        return sim.events
+          .filter((e) => e.job_id === jobId)
+          .sort((a, b) => Date.parse(a.created_at) - Date.parse(b.created_at))
           .map((e) => ({ ...e }));
       },
 

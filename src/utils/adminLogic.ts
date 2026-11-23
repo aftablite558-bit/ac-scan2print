@@ -25,6 +25,7 @@ export const BIHAR_CATEGORIES: readonly BiharCategory[] = [
 
 const VALID_MAINS: MainRoute[] = [
   'home',
+  'print-management',
   'hardware',
   'cms',
   'enquiries',
@@ -38,11 +39,27 @@ export function parseHash(hash: string): ParsedRoute {
   const clean = hash.replace(/^#\/?/, '').trim();
   if (!clean || clean === 'home') return { main: 'home' };
   const parts = clean.split('/').filter(Boolean);
-  const first = parts[0] as MainRoute;
+  const rawFirst = parts[0];
+
+  if (rawFirst === 'print-jobs') return { main: 'print-management', sub: 'jobs' };
+  if (rawFirst === 'print-queue') return { main: 'print-management', sub: 'queue' };
+  if (rawFirst === 'print-agents') return { main: 'print-management', sub: 'devices' };
+  if (rawFirst === 'pricing' || rawFirst === 'payments') {
+    return { main: 'print-management', sub: 'pricing' };
+  }
+
+  const first = rawFirst as MainRoute;
   if (!VALID_MAINS.includes(first)) return { main: 'home' };
   const rawSub = parts[1];
   const sub = rawSub === 'catalog' ? 'services' : rawSub;
 
+  if (first === 'print-management') {
+    const validPrintTabs = ['jobs', 'queue', 'devices', 'pricing'];
+    return {
+      main: 'print-management',
+      sub: sub && validPrintTabs.includes(sub) ? sub : 'jobs',
+    };
+  }
   if (first === 'hardware') {
     const validHardware = ['printers', 'discovery', 'checklist'];
     return { main: 'hardware', sub: sub && validHardware.includes(sub) ? sub : 'printers' };
@@ -86,6 +103,8 @@ export function getPageTitle(route: ParsedRoute): string {
   switch (route.main) {
     case 'home':
       return 'Admin Dashboard — AMAN COMPUTER';
+    case 'print-management':
+      return 'Print Management — AMAN COMPUTER';
     case 'hardware':
       return 'Hardware & Printers — AMAN COMPUTER';
     case 'cms':

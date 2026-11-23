@@ -18,6 +18,7 @@
     "test:phaseC": "tsx --test tests/phaseC/*.test.ts",
     "test:phase3a": "tsx --test tests/phase3a/*.test.ts",
     "test:phase3": "tsx --test tests/phase3/*.test.ts",
+    "test:phase4": "tsx --test tests/phase4/*.test.ts src/utils/printManagement.test.ts",
     "admin:bootstrap": "tsx scripts/bootstrap-super-admin.ts"
   },
   "dependencies": {

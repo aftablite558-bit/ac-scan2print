@@ -4,6 +4,7 @@ import {
   Building2,
   ChevronRight,
   CircleHelp,
+  FileCheck2,
   Home,
   Inbox,
   Landmark,
@@ -451,6 +452,12 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       label: 'Operations',
       items: [
         {
+          id: 'print-management',
+          label: 'Print Management',
+          href: '#/print-management/jobs',
+          icon: FileCheck2,
+        },
+        {
           id: 'hardware',
           label: 'Hardware & Printers',
           href: '#/hardware',
@@ -483,6 +490,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   const breadcrumb = (() => {
     const mapMain: Record<string, { label: string; href: string }> = {
       home: { label: 'Overview', href: '#/home' },
+      'print-management': { label: 'Print Management', href: '#/print-management/jobs' },
       hardware: { label: 'Hardware & Printers', href: '#/hardware' },
       cms: { label: 'CMS', href: '#/cms/business' },
       enquiries: { label: 'Enquiries', href: '#/enquiries' },
@@ -492,6 +500,10 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       help: { label: 'Help', href: '#/help' },
     };
     const subLabels: Record<string, string> = {
+      jobs: 'Jobs & Dashboard',
+      queue: 'Print Queue',
+      devices: 'Agent Devices',
+      pricing: 'Pricing & UPI',
       printers: 'Printer Registry',
       discovery: 'Agent Discovery Prep',
       checklist: 'Audit Checklist',
@@ -1013,6 +1025,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
           <span ref={tabbarPillRef} className="tabbar__pill" aria-hidden="true" />
           {[
             { id: 'home', label: 'Overview', href: '#/home', icon: Home },
+            { id: 'print-management', label: 'Print', href: '#/print-management/jobs', icon: FileCheck2 },
             { id: 'enquiries', label: 'Enquiries', href: '#/enquiries', icon: Inbox },
             { id: 'bihar-updates', label: 'Bihar', href: '#/bihar-updates', icon: Landmark },
           ].map((item) => {

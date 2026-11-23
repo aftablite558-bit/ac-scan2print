@@ -10,6 +10,7 @@ import {
   getClientIp,
   handleErrorResponse,
   inspectUploadedBytes,
+  isValidUuid,
   jsonResponse,
   parseAndValidatePageRange,
   sha256Hex,
@@ -31,6 +32,12 @@ import {
   triStateToNullableBoolean,
   validatePrinterName,
 } from './printers.ts';
+import {
+  buildAdminQueueItems,
+  computeAdminPrintDashboardMetrics,
+  computeDeviceHeartbeatStatus,
+  filterAndSortAdminJobs,
+} from './printManagement.ts';
 import {
   AppError,
   type JobStatus,
@@ -73,8 +80,25 @@ async function withHttpWrapper(
   fn: (cors: Record<string, string>) => Promise<Response>
 ): Promise<Response> {
   const cors = buildCorsHeaders(req, env.ALLOWED_ORIGINS);
+  const reqOrigin = (req.headers.get('origin') ?? '').trim();
+  const originRejected = Boolean(reqOrigin && !cors['Access-Control-Allow-Origin']);
+
   if (req.method === 'OPTIONS') {
+    if (originRejected) {
+      return jsonResponse(
+        403,
+        { error: { code: 'ORIGIN_NOT_ALLOWED', message: 'Request origin is not permitted.' } },
+        cors
+      );
+    }
     return new Response(null, { status: 204, headers: cors });
+  }
+  if (originRejected) {
+    return jsonResponse(
+      403,
+      { error: { code: 'ORIGIN_NOT_ALLOWED', message: 'Request origin is not permitted.' } },
+      cors
+    );
   }
   const methodOk =
     allowedMethod === 'GET_OR_POST'
@@ -1176,6 +1200,7 @@ export async function handleAdminReviewPrintJob(
     const jobId = typeof body.jobId === 'string' ? body.jobId.trim() : '';
     const action = typeof body.action === 'string' ? body.action.trim() : '';
     if (!jobId) throw new AppError(400, 'MISSING_JOB_ID', 'jobId is required.');
+    if (!isValidUuid(jobId)) throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
 
     const job = await adapter.getJobById(jobId);
     if (!job) throw new AppError(404, 'JOB_NOT_FOUND', 'Print job not found.');
@@ -1215,11 +1240,27 @@ export async function handleAdminReviewPrintJob(
       approve: 'approved',
       reject: 'rejected',
       cancel: 'cancelled',
+      mark_completed: 'completed',
     };
 
     const nextStatus = actionToStatus[action];
     if (!nextStatus) {
       throw new AppError(400, 'INVALID_ACTION', `Unsupported review action '${action}'.`);
+    }
+
+    if (action === 'approve' && (job.status === 'approved' || job.status === 'queued')) {
+      throw new AppError(409, 'ALREADY_APPROVED', `Print job is already in '${job.status}' state.`);
+    }
+
+    if (action === 'cancel' || action === 'mark_completed') {
+      const activeAttempts = await adapter.getActiveAttemptsForJob(job.id);
+      if (activeAttempts.length > 0) {
+        throw new AppError(
+          409,
+          'ACTIVE_ATTEMPT_EXISTS',
+          'Cannot modify or cancel job while an active print agent attempt is in progress.'
+        );
+      }
     }
 
     assertTransition(job.status, nextStatus);
@@ -1233,6 +1274,7 @@ export async function handleAdminReviewPrintJob(
     const patch: Partial<PrintJob> = {
       status: nextStatus,
       ...(nextStatus === 'approved' ? { approved_at: nowIso } : {}),
+      ...(nextStatus === 'completed' ? { completed_at: nowIso } : {}),
       ...(nextStatus === 'rejected' ? { rejection_reason: reason } : {}),
       ...(nextStatus === 'cancelled' ? { cancellation_reason: reason || 'Cancelled by Admin' } : {}),
     };
@@ -1249,7 +1291,16 @@ export async function handleAdminReviewPrintJob(
       metadata: reason ? { reason } : {},
     });
 
-    return jsonResponse(200, { jobId: updated.id, status: updated.status, approvedAt: updated.approved_at }, cors);
+    return jsonResponse(
+      200,
+      {
+        jobId: updated.id,
+        status: updated.status,
+        approvedAt: updated.approved_at,
+        completedAt: updated.completed_at,
+      },
+      cors
+    );
   });
 }
 
@@ -1269,6 +1320,14 @@ export async function handleAdminVerifyPayment(
     const decision = body.decision === 'approve' ? 'approve' : body.decision === 'reject' ? 'reject' : null;
     if (!paymentId || !decision) {
       throw new AppError(400, 'INVALID_INPUT', 'paymentId and decision (approve|reject) are required.');
+    }
+    if (!isValidUuid(paymentId)) {
+      throw new AppError(400, 'INVALID_PAYMENT_ID', 'paymentId must be a valid UUID.');
+    }
+
+    const requestedPrinterId = typeof body.printerId === 'string' ? body.printerId.trim() : '';
+    if (requestedPrinterId && !isValidUuid(requestedPrinterId)) {
+      throw new AppError(400, 'INVALID_PRINTER_ID', 'printerId must be a valid UUID.');
     }
 
     const payment = await adapter.getPaymentById(paymentId);
@@ -1298,9 +1357,16 @@ export async function handleAdminVerifyPayment(
         rejection_reason: null,
       });
 
-      const updatedJob = await adapter.updateJob(job.id, {
+      // Verified UPI payments automatically qualify for the print queue without requiring
+      // a redundant manual Admin "Approve Job" step.
+      const shouldAutoQualifyUpi =
+        payment.payment_method === 'upi' &&
+        (job.status === 'submitted' || job.status === 'under_review' || job.status === 'awaiting_payment');
+
+      let currentJob = await adapter.updateJob(job.id, {
         payment_status: 'paid',
         payment_method: payment.payment_method,
+        ...(shouldAutoQualifyUpi ? { status: 'approved', approved_at: job.approved_at ?? nowIso } : {}),
       });
 
       await adapter.appendEvent({
@@ -1309,13 +1375,64 @@ export async function handleAdminVerifyPayment(
         actorId: admin.id,
         eventType: 'payment_verified_paid',
         previousStatus: job.status,
-        newStatus: updatedJob.status,
-        metadata: { payment_id: payment.id, method: payment.payment_method, amount: payment.amount },
+        newStatus: currentJob.status,
+        metadata: {
+          payment_id: payment.id,
+          method: payment.payment_method,
+          amount: payment.amount,
+          auto_qualified_for_queue: shouldAutoQualifyUpi,
+        },
       });
+
+      if (shouldAutoQualifyUpi) {
+        await adapter.appendEvent({
+          jobId: job.id,
+          actorType: 'system',
+          actorId: admin.id,
+          eventType: 'upi_payment_auto_approved',
+          previousStatus: job.status,
+          newStatus: 'approved',
+          metadata: { payment_id: payment.id, verified_by_admin_id: admin.id },
+        });
+      }
+
+      let autoReleased = false;
+      if (requestedPrinterId && payment.payment_method === 'upi' && currentJob.status === 'approved') {
+        const printer = await adapter.getPrinterById(requestedPrinterId);
+        if (
+          !printer ||
+          printer.archived_at ||
+          printer.approval_status === 'pending_review' ||
+          printer.approval_status === 'rejected' ||
+          !printer.is_enabled ||
+          printer.printer_status === 'disabled'
+        ) {
+          throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Selected printer is missing or disabled.');
+        }
+        const activeAttempts = await adapter.getActiveAttemptsForJob(currentJob.id);
+        if (activeAttempts.length > 0) {
+          throw new AppError(409, 'ACTIVE_ATTEMPT_EXISTS', 'An active print attempt already exists for this job.');
+        }
+        currentJob = await adapter.releaseJobToQueue({
+          jobId: currentJob.id,
+          printerId: printer.id,
+          adminId: admin.id,
+        });
+        autoReleased = true;
+      }
 
       return jsonResponse(
         200,
-        { paymentId: updatedPayment.id, paymentStatus: updatedPayment.payment_status, jobPaymentStatus: updatedJob.payment_status },
+        {
+          paymentId: updatedPayment.id,
+          paymentStatus: updatedPayment.payment_status,
+          jobPaymentStatus: currentJob.payment_status,
+          jobStatus: currentJob.status,
+          approvedAt: currentJob.approved_at,
+          assignedPrinterId: currentJob.assigned_printer_id,
+          autoQualified: shouldAutoQualifyUpi,
+          autoReleased,
+        },
         cors
       );
     }
@@ -1448,6 +1565,19 @@ export async function handleAdminUpdatePaymentSettings(
     const admin = await requireMvpAdmin(req, adapter, env);
     if (req.method === 'GET') {
       const settings = await adapter.getPaymentSettings();
+      let upiQrSignedUrl: string | null = null;
+      if (settings.upi_qr_storage_path) {
+        try {
+          const signed = await adapter.createSignedDownloadUrl(
+            settings.upi_qr_storage_bucket || 'payment-assets',
+            settings.upi_qr_storage_path,
+            120
+          );
+          upiQrSignedUrl = signed.signedUrl;
+        } catch {
+          upiQrSignedUrl = null;
+        }
+      }
       return jsonResponse(
         200,
         {
@@ -1460,6 +1590,7 @@ export async function handleAdminUpdatePaymentSettings(
             isActive: admin.is_active,
           },
           settings,
+          upiQrSignedUrl,
         },
         cors
       );
@@ -1547,7 +1678,21 @@ export async function handleAdminUpdatePaymentSettings(
       metadata: { upi_enabled: updated.upi_enabled, has_qr: Boolean(updated.upi_qr_storage_path) },
     });
 
-    return jsonResponse(200, { settings: updated }, cors);
+    let upiQrSignedUrl: string | null = null;
+    if (updated.upi_qr_storage_path) {
+      try {
+        const signed = await adapter.createSignedDownloadUrl(
+          updated.upi_qr_storage_bucket || 'payment-assets',
+          updated.upi_qr_storage_path,
+          120
+        );
+        upiQrSignedUrl = signed.signedUrl;
+      } catch {
+        upiQrSignedUrl = null;
+      }
+    }
+
+    return jsonResponse(200, { settings: updated, upiQrSignedUrl }, cors);
   });
 }
 
@@ -1567,6 +1712,12 @@ export async function handleAdminReleasePrintJob(
     const printerId = typeof body.printerId === 'string' ? body.printerId.trim() : '';
     if (!jobId || !printerId) {
       throw new AppError(400, 'MISSING_FIELDS', 'jobId and printerId are required.');
+    }
+    if (!isValidUuid(jobId)) {
+      throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
+    }
+    if (!isValidUuid(printerId)) {
+      throw new AppError(400, 'INVALID_PRINTER_ID', 'printerId must be a valid UUID.');
     }
 
     const job = await adapter.getJobById(jobId);
@@ -1618,6 +1769,7 @@ export async function handleAdminRetryPrintJob(
     const action = typeof body.action === 'string' ? body.action : 'retry';
     const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
     if (!jobId) throw new AppError(400, 'MISSING_JOB_ID', 'jobId is required.');
+    if (!isValidUuid(jobId)) throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
     if (reason.length < 3) {
       throw new AppError(400, 'REASON_REQUIRED', 'Admin reconciliation/retry requires an explicit reason.');
     }
@@ -1679,6 +1831,9 @@ export async function handleAdminRetryPrintJob(
         : job.assigned_printer_id ?? '';
     if (!printerId) {
       throw new AppError(400, 'MISSING_PRINTER_ID', 'printerId is required to requeue job.');
+    }
+    if (!isValidUuid(printerId)) {
+      throw new AppError(400, 'INVALID_PRINTER_ID', 'printerId must be a valid UUID.');
     }
     const printer = await adapter.getPrinterById(printerId);
     if (!printer || !printer.is_enabled || printer.printer_status === 'disabled') {
@@ -2684,4 +2839,519 @@ export async function handleAgentSyncPrinters(
     return jsonResponse(200, { ok: true, deviceId: device.id, synced }, cors);
   });
 }
+
+// ---------------------------------------------------------------------------
+// 21. Phase 4 Admin: admin-print-jobs (Dashboard, Job Detail, Signed URLs, Pricing CRUD, Device Lifecycle)
+// ---------------------------------------------------------------------------
+function isPreviewableMimeType(mime: string | null): boolean {
+  if (!mime) return false;
+  const norm = mime.toLowerCase();
+  return norm === 'application/pdf' || norm === 'image/png' || norm === 'image/jpeg';
+}
+
+export async function handleAdminPrintJobs(
+  req: Request,
+  adapter: Scan2PrintBackendAdapter,
+  env: RuntimeEnv = {}
+): Promise<Response> {
+  return withHttpWrapper(req, 'GET_OR_POST', env, async (cors) => {
+    const admin = await requireMvpAdmin(req, adapter, env);
+    if (!adapter.listPrintJobs || !adapter.listAllPayments || !adapter.listPrinters || !adapter.listDevices) {
+      throw new AppError(
+        500,
+        'SERVER_MISCONFIGURED',
+        'Phase 4 Admin Print Management adapter methods are not configured.'
+      );
+    }
+
+    const body = req.method === 'POST' ? await parseJsonBody(req) : {};
+    const url = new URL(req.url);
+    const action =
+      req.method === 'GET'
+        ? (url.searchParams.get('action') ?? 'list').trim()
+        : typeof body.action === 'string'
+          ? body.action.trim()
+          : 'list';
+
+    const nowIso = new Date().toISOString();
+    const nowMs = Date.parse(nowIso);
+
+    if (action === 'list') {
+      const [allJobs, allPayments, printers, devices, pricingRules, paymentSettings] = await Promise.all([
+        adapter.listPrintJobs(),
+        adapter.listAllPayments(),
+        adapter.listPrinters({ includeArchived: true }),
+        adapter.listDevices(),
+        adapter.listPricingRules ? adapter.listPricingRules() : Promise.resolve([]),
+        adapter.getPaymentSettings(),
+      ]);
+
+      const paymentsByJob = new Map<string, typeof allPayments>();
+      const latestTxnByJob = new Map<string, string | null>();
+      for (const p of allPayments) {
+        const list = paymentsByJob.get(p.job_id) ?? [];
+        list.push(p);
+        paymentsByJob.set(p.job_id, list);
+        if (!latestTxnByJob.has(p.job_id) && p.transaction_reference) {
+          latestTxnByJob.set(p.job_id, p.transaction_reference);
+        }
+      }
+
+      const rawFilters = {
+        search: req.method === 'GET' ? url.searchParams.get('search') ?? undefined : typeof body.search === 'string' ? body.search : undefined,
+        status: req.method === 'GET' ? url.searchParams.get('status') ?? undefined : typeof body.status === 'string' ? body.status : undefined,
+        paymentStatus:
+          req.method === 'GET'
+            ? url.searchParams.get('paymentStatus') ?? undefined
+            : typeof body.paymentStatus === 'string'
+              ? body.paymentStatus
+              : undefined,
+        paymentMethod:
+          req.method === 'GET'
+            ? url.searchParams.get('paymentMethod') ?? undefined
+            : typeof body.paymentMethod === 'string'
+              ? body.paymentMethod
+              : undefined,
+        printMode:
+          req.method === 'GET'
+            ? url.searchParams.get('printMode') ?? undefined
+            : typeof body.printMode === 'string'
+              ? body.printMode
+              : undefined,
+        printSides:
+          req.method === 'GET'
+            ? url.searchParams.get('printSides') ?? undefined
+            : typeof body.printSides === 'string'
+              ? body.printSides
+              : undefined,
+        paperSize:
+          req.method === 'GET'
+            ? url.searchParams.get('paperSize') ?? undefined
+            : typeof body.paperSize === 'string'
+              ? body.paperSize
+              : undefined,
+        dateFrom:
+          req.method === 'GET'
+            ? url.searchParams.get('dateFrom') ?? undefined
+            : typeof body.dateFrom === 'string'
+              ? body.dateFrom
+              : undefined,
+        dateTo:
+          req.method === 'GET'
+            ? url.searchParams.get('dateTo') ?? undefined
+            : typeof body.dateTo === 'string'
+              ? body.dateTo
+              : undefined,
+        sortOrder:
+          (req.method === 'GET'
+            ? url.searchParams.get('sortOrder')
+            : body.sortOrder) === 'asc'
+            ? ('asc' as const)
+            : ('desc' as const),
+      };
+
+      const filteredJobs = filterAndSortAdminJobs(allJobs, rawFilters, latestTxnByJob);
+      const rawPage = req.method === 'GET' ? Number(url.searchParams.get('page') ?? 1) : Number(body.page ?? 1);
+      const rawPageSize =
+        req.method === 'GET' ? Number(url.searchParams.get('pageSize') ?? 20) : Number(body.pageSize ?? 20);
+      const pageSize = Number.isInteger(rawPageSize) ? Math.max(1, Math.min(rawPageSize, 100)) : 20;
+      const totalItems = filteredJobs.length;
+      const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+      const page = Number.isInteger(rawPage) ? Math.max(1, Math.min(rawPage, totalPages)) : 1;
+      const offset = (page - 1) * pageSize;
+
+      const printerMap = new Map(printers.map((p) => [p.id, p]));
+      const pagedJobs = filteredJobs.slice(offset, offset + pageSize).map((job) => {
+        const jobPayments = paymentsByJob.get(job.id) ?? [];
+        const pendingPayment = jobPayments.find((p) => p.payment_status === 'pending_verification') ?? null;
+        const latestPayment = jobPayments[jobPayments.length - 1] ?? null;
+        return {
+          ...job,
+          assigned_printer_name: job.assigned_printer_id
+            ? printerMap.get(job.assigned_printer_id)?.printer_name ?? null
+            : null,
+          pending_payment_id: pendingPayment?.id ?? null,
+          latest_transaction_reference: pendingPayment?.transaction_reference ?? latestPayment?.transaction_reference ?? null,
+        };
+      });
+
+      const metrics = computeAdminPrintDashboardMetrics(allJobs, allPayments, nowIso);
+      const queue = buildAdminQueueItems(allJobs, printers, devices, nowIso);
+      const publicDevices = devices.map((d) => ({
+        ...toPublicDeviceSummary(d),
+        onlineStatus: computeDeviceHeartbeatStatus(d, nowMs),
+      }));
+
+      let upiQrSignedUrl: string | null = null;
+      if (paymentSettings.upi_qr_storage_path) {
+        try {
+          const signed = await adapter.createSignedDownloadUrl(
+            paymentSettings.upi_qr_storage_bucket || 'payment-assets',
+            paymentSettings.upi_qr_storage_path,
+            120
+          );
+          upiQrSignedUrl = signed.signedUrl;
+        } catch {
+          upiQrSignedUrl = null;
+        }
+      }
+
+      return jsonResponse(
+        200,
+        {
+          jobs: pagedJobs,
+          pagination: { page, pageSize, totalItems, totalPages },
+          metrics,
+          queue,
+          printers,
+          devices: publicDevices,
+          pricingRules,
+          paymentSettings,
+          upiQrSignedUrl,
+          serverNowIso: nowIso,
+        },
+        cors
+      );
+    }
+
+    if (action === 'detail') {
+      const jobId =
+        req.method === 'GET'
+          ? (url.searchParams.get('jobId') ?? '').trim()
+          : typeof body.jobId === 'string'
+            ? body.jobId.trim()
+            : '';
+      if (!jobId) {
+        throw new AppError(400, 'MISSING_JOB_ID', 'jobId is required.');
+      }
+      if (!isValidUuid(jobId)) {
+        throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
+      }
+
+      const job = await adapter.getJobById(jobId);
+      if (!job) {
+        throw new AppError(404, 'JOB_NOT_FOUND', 'Print job not found.');
+      }
+
+      const [files, payments, attempts, events, assignedPrinter, pricingRule] = await Promise.all([
+        adapter.getFilesForJob(job.id),
+        adapter.getPaymentsForJob(job.id),
+        adapter.listAttemptsForJob ? adapter.listAttemptsForJob(job.id) : adapter.getActiveAttemptsForJob(job.id),
+        adapter.listEventsForJob ? adapter.listEventsForJob(job.id) : Promise.resolve([]),
+        job.assigned_printer_id ? adapter.getPrinterById(job.assigned_printer_id) : Promise.resolve(null),
+        job.pricing_rule_id && adapter.getPricingRuleById
+          ? adapter.getPricingRuleById(job.pricing_rule_id)
+          : Promise.resolve(null),
+      ]);
+
+      const filesWithUrls = await Promise.all(
+        files.map(async (file) => {
+          let signedDownloadUrl: string | null = null;
+          let expiresInSeconds: number | null = null;
+          if (!file.deleted_at) {
+            try {
+              const signed = await adapter.createSignedDownloadUrl(file.storage_bucket, file.storage_path, 120);
+              signedDownloadUrl = signed.signedUrl;
+              expiresInSeconds = signed.expiresInSeconds;
+            } catch {
+              signedDownloadUrl = null;
+            }
+          }
+          return {
+            ...file,
+            signedDownloadUrl,
+            expiresInSeconds,
+            previewSupported: isPreviewableMimeType(file.detected_mime_type),
+          };
+        })
+      );
+
+      const paymentsWithUrls = await Promise.all(
+        payments.map(async (payment) => {
+          let screenshotSignedUrl: string | null = null;
+          let expiresInSeconds: number | null = null;
+          if (payment.screenshot_storage_path) {
+            try {
+              const signed = await adapter.createSignedDownloadUrl(
+                payment.screenshot_storage_bucket || 'payment-evidence',
+                payment.screenshot_storage_path,
+                120
+              );
+              screenshotSignedUrl = signed.signedUrl;
+              expiresInSeconds = signed.expiresInSeconds;
+            } catch {
+              screenshotSignedUrl = null;
+            }
+          }
+          return {
+            ...payment,
+            screenshotSignedUrl,
+            expiresInSeconds,
+          };
+        })
+      );
+
+      return jsonResponse(
+        200,
+        {
+          job,
+          files: filesWithUrls,
+          payments: paymentsWithUrls,
+          attempts,
+          events,
+          assignedPrinter,
+          pricingRule,
+        },
+        cors
+      );
+    }
+
+    if (action === 'pricing_list') {
+      if (!adapter.listPricingRules) {
+        throw new AppError(500, 'SERVER_MISCONFIGURED', 'Pricing list adapter method is missing.');
+      }
+      const pricingRules = await adapter.listPricingRules();
+      return jsonResponse(200, { pricingRules }, cors);
+    }
+
+    if (action === 'pricing_save') {
+      if (!adapter.listPricingRules || !adapter.createPricingRule || !adapter.updatePricingRule) {
+        throw new AppError(500, 'SERVER_MISCONFIGURED', 'Pricing CRUD adapter methods are missing.');
+      }
+      const ruleId = typeof body.ruleId === 'string' && body.ruleId.trim() ? body.ruleId.trim() : null;
+      if (ruleId && !isValidUuid(ruleId)) {
+        throw new AppError(400, 'INVALID_RULE_ID', 'ruleId must be a valid UUID.');
+      }
+      const ruleName = typeof body.ruleName === 'string' ? body.ruleName.trim().slice(0, 100) : '';
+      const paperSize = (typeof body.paperSize === 'string' ? body.paperSize.trim() : '') as PaperSize;
+      const printMode = (typeof body.printMode === 'string' ? body.printMode.trim() : '') as PrintMode;
+      const printSides = (typeof body.printSides === 'string' ? body.printSides.trim() : '') as PrintSides;
+      const pricingUnit =
+        body.pricingUnit === 'per_printed_page' || body.pricingUnit === 'per_physical_sheet'
+          ? body.pricingUnit
+          : printSides === 'duplex'
+            ? 'per_physical_sheet'
+            : 'per_printed_page';
+      const rate = typeof body.rate === 'number' ? body.rate : Number(body.rate);
+      const minimumCharge =
+        body.minimumCharge !== undefined ? Number(body.minimumCharge) : 0;
+      const isActive = body.isActive !== false;
+
+      if (ruleName.length < 2) {
+        throw new AppError(400, 'INVALID_RULE_NAME', 'ruleName must be at least 2 characters.');
+      }
+      if (!PAPER_SIZES.has(paperSize)) {
+        throw new AppError(400, 'INVALID_OPTION', `Unsupported paperSize '${paperSize}'.`);
+      }
+      if (!PRINT_MODES.has(printMode)) {
+        throw new AppError(400, 'INVALID_OPTION', `Unsupported printMode '${printMode}'.`);
+      }
+      if (!PRINT_SIDES.has(printSides)) {
+        throw new AppError(400, 'INVALID_OPTION', `Unsupported printSides '${printSides}'.`);
+      }
+      if (printSides === 'duplex' && pricingUnit !== 'per_physical_sheet') {
+        throw new AppError(
+          400,
+          'DUPLEX_MUST_USE_PHYSICAL_SHEET',
+          'Duplex print pricing rules must strictly use per_physical_sheet.'
+        );
+      }
+      if (!Number.isFinite(rate) || rate < 0 || !Number.isFinite(minimumCharge) || minimumCharge < 0) {
+        throw new AppError(400, 'INVALID_RATE', 'Rate and minimum charge must be non-negative numbers.');
+      }
+
+      const roundedRate = Math.round(rate * 100) / 100;
+      const roundedMinimum = Math.round(minimumCharge * 100) / 100;
+
+      // Deactivate any conflicting active rule with the same (paper_size, print_mode, print_sides)
+      if (isActive) {
+        const existingRules = await adapter.listPricingRules();
+        for (const r of existingRules) {
+          if (
+            r.id !== ruleId &&
+            r.is_active &&
+            r.paper_size === paperSize &&
+            r.print_mode === printMode &&
+            r.print_sides === printSides
+          ) {
+            await adapter.updatePricingRule(r.id, { is_active: false });
+          }
+        }
+      }
+
+      const saved = ruleId
+        ? await adapter.updatePricingRule(ruleId, {
+            rule_name: ruleName,
+            paper_size: paperSize,
+            print_mode: printMode,
+            print_sides: printSides,
+            pricing_unit: pricingUnit,
+            rate: roundedRate,
+            minimum_charge: roundedMinimum,
+            is_active: isActive,
+          })
+        : await adapter.createPricingRule({
+            ruleName,
+            paperSize,
+            printMode,
+            printSides,
+            pricingUnit,
+            rate: roundedRate,
+            minimumCharge: roundedMinimum,
+            isActive,
+          });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'pricing_rule_saved',
+        previousStatus: null,
+        newStatus: saved.is_active ? 'active' : 'inactive',
+        metadata: {
+          rule_id: saved.id,
+          paper_size: saved.paper_size,
+          print_mode: saved.print_mode,
+          print_sides: saved.print_sides,
+          pricing_unit: saved.pricing_unit,
+          rate: saved.rate,
+          minimum_charge: saved.minimum_charge,
+        },
+      });
+
+      const pricingRules = await adapter.listPricingRules();
+      return jsonResponse(ruleId ? 200 : 201, { rule: saved, pricingRules }, cors);
+    }
+
+    if (action === 'pricing_toggle') {
+      if (!adapter.listPricingRules || !adapter.getPricingRuleById || !adapter.updatePricingRule) {
+        throw new AppError(500, 'SERVER_MISCONFIGURED', 'Pricing toggle adapter methods are missing.');
+      }
+      const ruleId = typeof body.ruleId === 'string' ? body.ruleId.trim() : '';
+      if (!ruleId || typeof body.isActive !== 'boolean') {
+        throw new AppError(400, 'INVALID_INPUT', 'ruleId and isActive boolean are required.');
+      }
+      if (!isValidUuid(ruleId)) {
+        throw new AppError(400, 'INVALID_RULE_ID', 'ruleId must be a valid UUID.');
+      }
+      const target = await adapter.getPricingRuleById(ruleId);
+      if (!target) {
+        throw new AppError(404, 'RULE_NOT_FOUND', 'Pricing rule not found.');
+      }
+
+      if (body.isActive) {
+        const existingRules = await adapter.listPricingRules();
+        for (const r of existingRules) {
+          if (
+            r.id !== target.id &&
+            r.is_active &&
+            r.paper_size === target.paper_size &&
+            r.print_mode === target.print_mode &&
+            r.print_sides === target.print_sides
+          ) {
+            await adapter.updatePricingRule(r.id, { is_active: false });
+          }
+        }
+      }
+
+      const updated = await adapter.updatePricingRule(target.id, { is_active: body.isActive });
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'pricing_rule_toggled',
+        previousStatus: target.is_active ? 'active' : 'inactive',
+        newStatus: updated.is_active ? 'active' : 'inactive',
+        metadata: { rule_id: updated.id },
+      });
+      const pricingRules = await adapter.listPricingRules();
+      return jsonResponse(200, { rule: updated, pricingRules }, cors);
+    }
+
+    if (action === 'device_list') {
+      const devices = await adapter.listDevices();
+      return jsonResponse(
+        200,
+        {
+          devices: devices.map((d) => ({
+            ...toPublicDeviceSummary(d),
+            onlineStatus: computeDeviceHeartbeatStatus(d, nowMs),
+          })),
+          serverNowIso: nowIso,
+        },
+        cors
+      );
+    }
+
+    if (action === 'device_action') {
+      if (!adapter.getDeviceById) {
+        throw new AppError(500, 'SERVER_MISCONFIGURED', 'getDeviceById is not configured.');
+      }
+      const deviceId = typeof body.deviceId === 'string' ? body.deviceId.trim() : '';
+      const deviceAction =
+        body.deviceAction === 'activate' || body.deviceAction === 'pause' || body.deviceAction === 'revoke'
+          ? body.deviceAction
+          : null;
+      if (!deviceId || !deviceAction) {
+        throw new AppError(400, 'INVALID_INPUT', 'deviceId and deviceAction (activate|pause|revoke) are required.');
+      }
+      if (!isValidUuid(deviceId)) {
+        throw new AppError(400, 'INVALID_DEVICE_ID', 'deviceId must be a valid UUID.');
+      }
+      const device = await adapter.getDeviceById(deviceId);
+      if (!device) {
+        throw new AppError(404, 'DEVICE_NOT_FOUND', 'Print agent device not found.');
+      }
+      if (device.device_status === 'revoked' && deviceAction !== 'revoke') {
+        throw new AppError(
+          409,
+          'DEVICE_PERMANENTLY_REVOKED',
+          'Revoked devices cannot be reactivated; enroll a fresh device credential instead.'
+        );
+      }
+
+      const nextStatus: PrintDevice['device_status'] =
+        deviceAction === 'activate' ? 'active' : deviceAction === 'pause' ? 'paused' : 'revoked';
+
+      const updated = await adapter.updateDevice(device.id, {
+        device_status: nextStatus,
+        ...(deviceAction === 'activate' && !device.approved_at ? { approved_at: nowIso } : {}),
+        ...(deviceAction === 'revoke' ? { revoked_at: nowIso } : {}),
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'agent_device_status_changed',
+        previousStatus: device.device_status,
+        newStatus: updated.device_status,
+        metadata: {
+          device_id: updated.id,
+          device_name: updated.device_name,
+          reason: typeof body.reason === 'string' ? body.reason.trim().slice(0, 200) : null,
+        },
+      });
+
+      const devices = await adapter.listDevices();
+      return jsonResponse(
+        200,
+        {
+          device: {
+            ...toPublicDeviceSummary(updated),
+            onlineStatus: computeDeviceHeartbeatStatus(updated, nowMs),
+          },
+          devices: devices.map((d) => ({
+            ...toPublicDeviceSummary(d),
+            onlineStatus: computeDeviceHeartbeatStatus(d, nowMs),
+          })),
+        },
+        cors
+      );
+    }
+
+    throw new AppError(400, 'UNSUPPORTED_ACTION', `Unsupported admin-print-jobs action '${action}'.`);
+  });
+}
+
 

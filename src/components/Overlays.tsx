@@ -163,6 +163,10 @@ const SearchModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
     () =>
       [
         { label: 'Overview', sub: 'Admin Dashboard', route: '#/home' },
+        { label: 'Print Jobs & Dashboard', sub: 'Scan2Print › Jobs & Revenue', route: '#/print-management/jobs' },
+        { label: 'Active Print Queue', sub: 'Scan2Print › Queue Control', route: '#/print-management/queue' },
+        { label: 'Print Agent Devices', sub: 'Scan2Print › Enrolled PCs', route: '#/print-management/devices' },
+        { label: 'Pricing Rules & Shop UPI', sub: 'Scan2Print › Rates & QR', route: '#/print-management/pricing' },
         { label: 'Hardware & Printers', sub: 'Operations › Printer Registry', route: '#/hardware/printers' },
         { label: 'Agent Discovery Prep', sub: 'Hardware › Windows Agent', route: '#/hardware/discovery' },
         { label: 'Hardware Audit Checklist', sub: 'Hardware › Verification', route: '#/hardware/checklist' },

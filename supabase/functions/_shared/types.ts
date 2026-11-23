@@ -383,6 +383,7 @@ export interface Scan2PrintBackendAdapter {
   getJobByIdempotencyKey(key: string): Promise<PrintJob | null>;
   updateJob(jobId: string, patch: Partial<PrintJob>): Promise<PrintJob>;
   listJobsForRetentionCheck(): Promise<PrintJob[]>;
+  listPrintJobs?(): Promise<PrintJob[]>;
 
   // Files
   countActiveFilesForJob(jobId: string): Promise<number>;
@@ -399,6 +400,7 @@ export interface Scan2PrintBackendAdapter {
 
   // Payments
   getPaymentsForJob(jobId: string): Promise<PrintPayment[]>;
+  listAllPayments?(): Promise<PrintPayment[]>;
   getPaymentById(paymentId: string): Promise<PrintPayment | null>;
   findActivePaymentByUtr(utrNormalized: string): Promise<PrintPayment | null>;
   createPayment(input: {
@@ -416,6 +418,21 @@ export interface Scan2PrintBackendAdapter {
     idempotencyKey: string | null;
   }): Promise<PrintPayment>;
   updatePayment(paymentId: string, patch: Partial<PrintPayment>): Promise<PrintPayment>;
+
+  // Pricing Rules CRUD
+  listPricingRules?(): Promise<PrintPricingRule[]>;
+  getPricingRuleById?(ruleId: string): Promise<PrintPricingRule | null>;
+  createPricingRule?(input: {
+    ruleName: string;
+    paperSize: PaperSize;
+    printMode: PrintMode;
+    printSides: PrintSides;
+    pricingUnit: PricingUnit;
+    rate: number;
+    minimumCharge: number;
+    isActive: boolean;
+  }): Promise<PrintPricingRule>;
+  updatePricingRule?(ruleId: string, patch: Partial<PrintPricingRule>): Promise<PrintPricingRule>;
 
   // Printers, Devices & Attempts
   listPrinters?(options?: { includeArchived?: boolean }): Promise<PrintPrinter[]>;
@@ -458,9 +475,11 @@ export interface Scan2PrintBackendAdapter {
   }): Promise<PrintDevice>;
   updateDevice(deviceId: string, patch: Partial<PrintDevice>): Promise<PrintDevice>;
   getActiveAttemptsForJob(jobId: string): Promise<PrintJobAttempt[]>;
+  listAttemptsForJob?(jobId: string): Promise<PrintJobAttempt[]>;
   getAttemptById(attemptId: string): Promise<PrintJobAttempt | null>;
   updateAttempt(attemptId: string, patch: Partial<PrintJobAttempt>): Promise<PrintJobAttempt>;
   listRecentEvents?(limit?: number, eventTypes?: string[]): Promise<PrintEvent[]>;
+  listEventsForJob?(jobId: string): Promise<PrintEvent[]>;
 
   // Atomic RPCs
   releaseJobToQueue(input: {
