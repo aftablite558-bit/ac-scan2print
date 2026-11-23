@@ -17,7 +17,8 @@
     "test:phase2": "tsx --test tests/phase2/*.test.ts",
     "test:phaseC": "tsx --test tests/phaseC/*.test.ts",
     "test:phase3a": "tsx --test tests/phase3a/*.test.ts",
-    "test:phase3": "tsx --test tests/phase3/*.test.ts"
+    "test:phase3": "tsx --test tests/phase3/*.test.ts",
+    "admin:bootstrap": "tsx scripts/bootstrap-super-admin.ts"
   },
   "dependencies": {
     "@google/genai": "^3.6.1",

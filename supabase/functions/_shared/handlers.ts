@@ -1101,6 +1101,15 @@ export async function handleAdminBootstrap(
       throw new AppError(401, 'UNAUTHORIZED', 'Invalid or expired Firebase ID token.');
     }
 
+    const allowedBootstrapUid = env.ADMIN_BOOTSTRAP_ALLOWED_UID?.trim();
+    if (allowedBootstrapUid && verified.firebaseUid !== allowedBootstrapUid) {
+      throw new AppError(
+        403,
+        'UID_NOT_AUTHORIZED',
+        'Verified Firebase UID is not authorized to bootstrap the single Admin account.'
+      );
+    }
+
     const body = await parseJsonBody(req);
     const bodyEmail = typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
     const email = (verified.email ?? bodyEmail).trim().toLowerCase();

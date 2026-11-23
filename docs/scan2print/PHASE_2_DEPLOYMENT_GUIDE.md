@@ -66,13 +66,11 @@ supabase functions deploy agent-report-job-event --no-verify-jwt
 
 ## 5. Single MVP Admin Bootstrap
 
-Call `admin-bootstrap` **once** over HTTPS with `x-admin-bootstrap-secret`:
+Run the one-time CLI provisioning utility from a trusted operator terminal (uses hidden TTY input or server-only env vars — never expose `ADMIN_BOOTSTRAP_SECRET` or `SUPABASE_SERVICE_ROLE_KEY` in `VITE_*` variables):
 ```bash
-curl -X POST "https://<PROJECT_REF>.supabase.co/functions/v1/admin-bootstrap" \
-  -H "Content-Type: application/json" \
-  -H "x-admin-bootstrap-secret: <ADMIN_BOOTSTRAP_SECRET>" \
-  -d '{"email":"<ADMIN_EMAIL>","password":"<STRONG_10+_CHAR_PASSWORD>","fullName":"<OWNER_NAME>"}'
+npm run admin:bootstrap
 ```
+Or pass explicit HTTPS headers (`Authorization: Bearer <FIREBASE_ID_TOKEN>`, `apikey: <SUPABASE_ANON_KEY>`, `x-admin-bootstrap-secret: <ADMIN_BOOTSTRAP_SECRET>`) with `{"email":"<ADMIN_EMAIL>","fullName":"<OWNER_NAME>","firebaseUid":"<TARGET_FIREBASE_UID>"}` to `POST https://<PROJECT_REF>.supabase.co/functions/v1/admin-bootstrap`.
 Subsequent calls automatically return `409 SINGLE_ADMIN_ALREADY_EXISTS`.
 
 ---

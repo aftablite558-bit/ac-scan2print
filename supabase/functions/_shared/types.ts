@@ -310,6 +310,7 @@ export interface RuntimeEnv {
   FIREBASE_PROJECT_ID?: string;
   CUSTOMER_PORTAL_URL?: string;
   ADMIN_BOOTSTRAP_SECRET?: string;
+  ADMIN_BOOTSTRAP_ALLOWED_UID?: string;
   CRON_SECRET?: string;
   ALLOWED_ORIGINS?: string;
   AGENT_CLAIM_LEASE_SECONDS?: string;
