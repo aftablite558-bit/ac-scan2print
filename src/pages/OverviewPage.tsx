@@ -102,7 +102,7 @@ export const OverviewPage: React.FC = () => {
             type="button"
             onClick={(e) => {
               popIcon(e.currentTarget);
-              navigate('#/print-management/jobs');
+              navigate('#/print-management/overview');
             }}
             className="btn-primary px-4 py-2 rounded-full text-[13.5px] font-semibold flex items-center gap-2 cursor-pointer"
           >

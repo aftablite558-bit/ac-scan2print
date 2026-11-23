@@ -16,15 +16,20 @@ import {
 import { getPageTitle, parseHash } from './adminLogic';
 
 test('parseHash and getPageTitle resolve Phase 4 Print Management routes and aliases', () => {
-  assert.deepEqual(parseHash('#/print-management'), { main: 'print-management', sub: 'jobs' });
+  assert.deepEqual(parseHash('#/print-management'), { main: 'print-management', sub: 'overview' });
+  assert.deepEqual(parseHash('#/print-management/overview'), { main: 'print-management', sub: 'overview' });
+  assert.deepEqual(parseHash('#/print-management/jobs'), { main: 'print-management', sub: 'jobs' });
   assert.deepEqual(parseHash('#/print-management/queue'), { main: 'print-management', sub: 'queue' });
+  assert.deepEqual(parseHash('#/print-management/payments'), { main: 'print-management', sub: 'payments' });
   assert.deepEqual(parseHash('#/print-management/devices'), { main: 'print-management', sub: 'devices' });
   assert.deepEqual(parseHash('#/print-management/pricing'), { main: 'print-management', sub: 'pricing' });
+  assert.deepEqual(parseHash('#/print-management/upi'), { main: 'print-management', sub: 'upi' });
   assert.deepEqual(parseHash('#/print-jobs'), { main: 'print-management', sub: 'jobs' });
   assert.deepEqual(parseHash('#/print-queue'), { main: 'print-management', sub: 'queue' });
   assert.deepEqual(parseHash('#/print-agents'), { main: 'print-management', sub: 'devices' });
   assert.deepEqual(parseHash('#/pricing'), { main: 'print-management', sub: 'pricing' });
-  assert.deepEqual(parseHash('#/payments'), { main: 'print-management', sub: 'pricing' });
+  assert.deepEqual(parseHash('#/payments'), { main: 'print-management', sub: 'payments' });
+  assert.deepEqual(parseHash('#/upi'), { main: 'print-management', sub: 'upi' });
   assert.equal(getPageTitle({ main: 'print-management', sub: 'jobs' }), 'Print Management — AMAN COMPUTER');
 });
 
@@ -69,7 +74,7 @@ test('Admin approval, queue release, retry, and cancel UI workflow guards enforc
   assert.equal(canAdminCancelJob({ status: 'completed' }), false);
 });
 
-test('Pricing rule validation rejects non-physical-sheet duplex and negative numbers', () => {
+test('Pricing rule validation rejects non-physical-sheet duplex, negative numbers, and invalid validity windows', () => {
   const draft = createEmptyPricingRuleDraft();
   draft.ruleName = 'A4 Duplex B&W';
   draft.printSides = 'duplex';
@@ -78,6 +83,13 @@ test('Pricing rule validation rejects non-physical-sheet duplex and negative num
   assert.match(validatePricingRuleDraft(draft) ?? '', /per_physical_sheet/);
 
   draft.pricingUnit = 'per_physical_sheet';
+  assert.equal(validatePricingRuleDraft(draft), null);
+
+  draft.validFrom = '2026-11-25T10:00';
+  draft.validUntil = '2026-11-25T09:00';
+  assert.match(validatePricingRuleDraft(draft) ?? '', /Valid Until/);
+
+  draft.validUntil = '2026-11-30T10:00';
   assert.equal(validatePricingRuleDraft(draft), null);
 
   draft.rate = '-2';

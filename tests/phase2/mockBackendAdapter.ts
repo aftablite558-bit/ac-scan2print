@@ -396,6 +396,12 @@ export class TestSupabaseSimulator {
         if (input.printSides === 'duplex' && input.pricingUnit !== 'per_physical_sheet') {
           throw new AppError(500, 'DB_CONSTRAINT', 'chk_duplex_uses_per_physical_sheet violation');
         }
+        const nowIso = new Date(sim.nowMs).toISOString();
+        const validFrom = input.validFrom ?? nowIso;
+        const validUntil = input.validUntil ?? null;
+        if (validUntil !== null && Date.parse(validUntil) <= Date.parse(validFrom)) {
+          throw new AppError(500, 'DB_CONSTRAINT', 'chk_valid_window violation');
+        }
         if (input.isActive) {
           const conflict = sim.pricingRules.find(
             (r) =>
@@ -408,7 +414,6 @@ export class TestSupabaseSimulator {
             throw new AppError(409, 'ACTIVE_PRICING_RULE_CONFLICT', 'idx_print_pricing_rules_active_unique violation');
           }
         }
-        const nowIso = new Date(sim.nowMs).toISOString();
         const rule: PrintPricingRule = {
           id: crypto.randomUUID(),
           rule_name: input.ruleName,
@@ -419,8 +424,8 @@ export class TestSupabaseSimulator {
           rate: input.rate,
           minimum_charge: input.minimumCharge,
           is_active: input.isActive,
-          valid_from: nowIso,
-          valid_until: null,
+          valid_from: validFrom,
+          valid_until: validUntil,
           created_at: nowIso,
           updated_at: nowIso,
         };
@@ -438,6 +443,9 @@ export class TestSupabaseSimulator {
         };
         if (next.print_sides === 'duplex' && next.pricing_unit !== 'per_physical_sheet') {
           throw new AppError(500, 'DB_CONSTRAINT', 'chk_duplex_uses_per_physical_sheet violation');
+        }
+        if (next.valid_until !== null && Date.parse(next.valid_until) <= Date.parse(next.valid_from)) {
+          throw new AppError(500, 'DB_CONSTRAINT', 'chk_valid_window violation');
         }
         if (next.is_active) {
           const conflict = sim.pricingRules.find(

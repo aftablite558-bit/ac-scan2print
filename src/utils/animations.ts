@@ -77,15 +77,20 @@ export function revealText(el: HTMLElement | null, delay = 0): gsap.core.Tween |
 
     return gsap.fromTo(
       chars,
-      { yPercent: 115, rotation: 6 },
+      { yPercent: 105, rotation: 4 },
       {
         yPercent: 0,
         rotation: 0,
-        duration: dur(0.85),
+        duration: dur(0.55),
         ease: 'power4.out',
-        stagger: dur(0.022),
+        stagger: dur(0.012),
         delay: dur(delay),
         clearProps: 'transform',
+        onComplete: () => {
+          el.querySelectorAll<HTMLElement>('.word').forEach((w) => {
+            w.style.overflow = 'visible';
+          });
+        },
       }
     );
   } catch {
@@ -111,19 +116,19 @@ export function revealCards(
   if (!list.length || reducedMotion()) return null;
 
   try {
-    const { y = 26, stagger = 0.06, delay = 0, from = 0.7 } = opts;
+    const { y = 20, stagger = 0.035, delay = 0, from = 0.45 } = opts;
     const tl = gsap.timeline({ delay: dur(delay) });
 
     list.forEach((el, idx) => {
-      const startAt = idx * stagger;
+      const startAt = idx * Math.min(stagger, 0.04);
       tl.fromTo(
         el,
-        { y, scale: 0.975, clipPath: clipInset(el, from) },
+        { y, scale: 0.98, clipPath: clipInset(el, from) },
         {
           y: 0,
           scale: 1,
           clipPath: clipInset(el, 0, 60),
-          duration: 0.9,
+          duration: 0.48,
           ease: 'expo.out',
           clearProps: 'transform,clipPath',
         },
@@ -139,16 +144,16 @@ export function revealCards(
       if (children.length) {
         tl.fromTo(
           children,
-          { opacity: 0, y: 8 },
+          { opacity: 0, y: 6 },
           {
             opacity: 1,
             y: 0,
-            duration: 0.55,
+            duration: 0.32,
             ease: 'power3.out',
-            stagger: 0.035,
+            stagger: 0.02,
             clearProps: 'transform,opacity',
           },
-          startAt + 0.14
+          startAt + 0.06
         );
       }
     });

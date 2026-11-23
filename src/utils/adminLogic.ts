@@ -44,9 +44,9 @@ export function parseHash(hash: string): ParsedRoute {
   if (rawFirst === 'print-jobs') return { main: 'print-management', sub: 'jobs' };
   if (rawFirst === 'print-queue') return { main: 'print-management', sub: 'queue' };
   if (rawFirst === 'print-agents') return { main: 'print-management', sub: 'devices' };
-  if (rawFirst === 'pricing' || rawFirst === 'payments') {
-    return { main: 'print-management', sub: 'pricing' };
-  }
+  if (rawFirst === 'pricing') return { main: 'print-management', sub: 'pricing' };
+  if (rawFirst === 'payments') return { main: 'print-management', sub: 'payments' };
+  if (rawFirst === 'upi') return { main: 'print-management', sub: 'upi' };
 
   const first = rawFirst as MainRoute;
   if (!VALID_MAINS.includes(first)) return { main: 'home' };
@@ -54,10 +54,10 @@ export function parseHash(hash: string): ParsedRoute {
   const sub = rawSub === 'catalog' ? 'services' : rawSub;
 
   if (first === 'print-management') {
-    const validPrintTabs = ['jobs', 'queue', 'devices', 'pricing'];
+    const validPrintTabs = ['overview', 'jobs', 'queue', 'payments', 'pricing', 'upi', 'devices'];
     return {
       main: 'print-management',
-      sub: sub && validPrintTabs.includes(sub) ? sub : 'jobs',
+      sub: sub && validPrintTabs.includes(sub) ? sub : 'overview',
     };
   }
   if (first === 'hardware') {

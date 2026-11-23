@@ -45,8 +45,11 @@ import {
   type PaperSize,
   type PrintAdminAccount,
   type PrintDevice,
+  type PrintFile,
   type PrintJob,
   type PrintMode,
+  type PrintPayment,
+  type PrintPaymentSettings,
   type PrintPrinter,
   type PrintSides,
   type RuntimeEnv,
@@ -1231,7 +1234,7 @@ export async function handleAdminReviewPrintJob(
         newStatus: job.status,
         metadata: { previous_amount: job.final_amount, new_amount: rounded, reason },
       });
-      return jsonResponse(200, { job: updated }, cors);
+      return jsonResponse(200, { job: toAdminJobSummary(updated) }, cors);
     }
 
     const actionToStatus: Record<string, JobStatus> = {
@@ -1486,6 +1489,7 @@ export async function handleAdminConfirmCash(
 
     const jobId = typeof body.jobId === 'string' ? body.jobId.trim() : '';
     if (!jobId) throw new AppError(400, 'MISSING_JOB_ID', 'jobId is required.');
+    if (!isValidUuid(jobId)) throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
 
     const job = await adapter.getJobById(jobId);
     if (!job) throw new AppError(404, 'JOB_NOT_FOUND', 'Print job not found.');
@@ -1589,7 +1593,7 @@ export async function handleAdminUpdatePaymentSettings(
             fullName: admin.full_name,
             isActive: admin.is_active,
           },
-          settings,
+          settings: toAdminPaymentSettingsSummary(settings),
           upiQrSignedUrl,
         },
         cors
@@ -1692,7 +1696,7 @@ export async function handleAdminUpdatePaymentSettings(
       }
     }
 
-    return jsonResponse(200, { settings: updated, upiQrSignedUrl }, cors);
+    return jsonResponse(200, { settings: toAdminPaymentSettingsSummary(updated), upiQrSignedUrl }, cors);
   });
 }
 
@@ -1726,8 +1730,15 @@ export async function handleAdminReleasePrintJob(
     assertCanReleaseToQueue(job);
 
     const printer = await adapter.getPrinterById(printerId);
-    if (!printer || !printer.is_enabled || printer.printer_status === 'disabled') {
-      throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Selected printer is missing or disabled.');
+    if (
+      !printer ||
+      printer.archived_at ||
+      printer.approval_status === 'pending_review' ||
+      printer.approval_status === 'rejected' ||
+      !printer.is_enabled ||
+      printer.printer_status === 'disabled'
+    ) {
+      throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Selected printer is missing, archived, unapproved, or disabled.');
     }
 
     const activeAttempts = await adapter.getActiveAttemptsForJob(job.id);
@@ -1836,8 +1847,15 @@ export async function handleAdminRetryPrintJob(
       throw new AppError(400, 'INVALID_PRINTER_ID', 'printerId must be a valid UUID.');
     }
     const printer = await adapter.getPrinterById(printerId);
-    if (!printer || !printer.is_enabled || printer.printer_status === 'disabled') {
-      throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Assigned printer is unavailable or disabled.');
+    if (
+      !printer ||
+      printer.archived_at ||
+      printer.approval_status === 'pending_review' ||
+      printer.approval_status === 'rejected' ||
+      !printer.is_enabled ||
+      printer.printer_status === 'disabled'
+    ) {
+      throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Assigned printer is unavailable, archived, unapproved, or disabled.');
     }
 
     assertTransition(job.status, 'queued');
@@ -2849,6 +2867,114 @@ function isPreviewableMimeType(mime: string | null): boolean {
   return norm === 'application/pdf' || norm === 'image/png' || norm === 'image/jpeg';
 }
 
+function toAdminJobSummary(job: PrintJob) {
+  return {
+    id: job.id,
+    job_number: job.job_number,
+    customer_name: job.customer_name,
+    customer_phone: job.customer_phone,
+    status: job.status,
+    payment_status: job.payment_status,
+    payment_method: job.payment_method,
+    subtotal: job.subtotal,
+    final_amount: job.final_amount,
+    currency: job.currency,
+    paper_size: job.paper_size,
+    print_mode: job.print_mode,
+    print_sides: job.print_sides,
+    copies: job.copies,
+    orientation: job.orientation,
+    scaling: job.scaling,
+    requested_page_range: job.requested_page_range,
+    verified_page_count: job.verified_page_count,
+    physical_sheet_count: job.physical_sheet_count,
+    pricing_rule_id: job.pricing_rule_id,
+    price_override_reason: job.price_override_reason,
+    assigned_printer_id: job.assigned_printer_id,
+    rejection_reason: job.rejection_reason,
+    cancellation_reason: job.cancellation_reason,
+    created_at: job.created_at,
+    updated_at: job.updated_at,
+    submitted_at: job.submitted_at,
+    approved_at: job.approved_at,
+    completed_at: job.completed_at,
+    expires_at: job.expires_at,
+  };
+}
+
+function toAdminFileSummary(
+  file: PrintFile,
+  signedDownloadUrl: string | null,
+  expiresInSeconds: number | null
+) {
+  return {
+    id: file.id,
+    job_id: file.job_id,
+    original_filename: file.original_filename,
+    detected_mime_type: file.detected_mime_type,
+    file_size_bytes: file.file_size_bytes,
+    sha256_checksum: file.sha256_checksum,
+    detected_page_count: file.detected_page_count,
+    validation_status: file.validation_status,
+    validation_error: file.validation_error,
+    uploaded_at: file.uploaded_at,
+    deleted_at: file.deleted_at,
+    signedDownloadUrl,
+    expiresInSeconds,
+    previewSupported: isPreviewableMimeType(file.detected_mime_type),
+  };
+}
+
+function toAdminPaymentSummary(
+  payment: PrintPayment,
+  screenshotSignedUrl: string | null,
+  expiresInSeconds: number | null
+) {
+  return {
+    id: payment.id,
+    job_id: payment.job_id,
+    payment_method: payment.payment_method,
+    payment_status: payment.payment_status,
+    amount: payment.amount,
+    currency: payment.currency,
+    transaction_reference: payment.transaction_reference,
+    screenshotSignedUrl,
+    expiresInSeconds,
+    submitted_at: payment.submitted_at,
+    verified_at: payment.verified_at,
+    verified_by: payment.verified_by,
+    rejection_reason: payment.rejection_reason,
+    created_at: payment.created_at,
+    updated_at: payment.updated_at,
+  };
+}
+
+function toAdminPaymentSettingsSummary(settings: PrintPaymentSettings) {
+  return {
+    id: settings.id,
+    upi_enabled: settings.upi_enabled,
+    upi_id: settings.upi_id,
+    has_qr_configured: Boolean(settings.upi_qr_storage_path),
+    display_name: settings.display_name,
+    payment_instructions: settings.payment_instructions,
+    updated_at: settings.updated_at,
+    updated_by: settings.updated_by,
+  };
+}
+
+function parseOptionalIsoDateTime(raw: unknown, fieldName: string): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null || raw === '') return null;
+  if (typeof raw !== 'string') {
+    throw new AppError(400, 'INVALID_VALIDITY_WINDOW', `${fieldName} must be a valid ISO timestamp.`);
+  }
+  const ms = Date.parse(raw.trim());
+  if (!Number.isFinite(ms)) {
+    throw new AppError(400, 'INVALID_VALIDITY_WINDOW', `${fieldName} must be a valid date/time.`);
+  }
+  return new Date(ms).toISOString();
+}
+
 export async function handleAdminPrintJobs(
   req: Request,
   adapter: Scan2PrintBackendAdapter,
@@ -2886,6 +3012,7 @@ export async function handleAdminPrintJobs(
         adapter.getPaymentSettings(),
       ]);
 
+      const jobMap = new Map(allJobs.map((j) => [j.id, j]));
       const paymentsByJob = new Map<string, typeof allPayments>();
       const latestTxnByJob = new Map<string, string | null>();
       for (const p of allPayments) {
@@ -2966,7 +3093,7 @@ export async function handleAdminPrintJobs(
         const pendingPayment = jobPayments.find((p) => p.payment_status === 'pending_verification') ?? null;
         const latestPayment = jobPayments[jobPayments.length - 1] ?? null;
         return {
-          ...job,
+          ...toAdminJobSummary(job),
           assigned_printer_name: job.assigned_printer_id
             ? printerMap.get(job.assigned_printer_id)?.printer_name ?? null
             : null,
@@ -2974,6 +3101,54 @@ export async function handleAdminPrintJobs(
           latest_transaction_reference: pendingPayment?.transaction_reference ?? latestPayment?.transaction_reference ?? null,
         };
       });
+
+      const pendingUpiPayments = allPayments
+        .filter((p) => p.payment_method === 'upi' && p.payment_status === 'pending_verification')
+        .slice(0, 50);
+
+      const paymentVerifications = await Promise.all(
+        pendingUpiPayments.map(async (p) => {
+          const job = jobMap.get(p.job_id);
+          let screenshotSignedUrl: string | null = null;
+          let expiresInSeconds: number | null = null;
+          if (p.screenshot_storage_path) {
+            try {
+              const signed = await adapter.createSignedDownloadUrl(
+                p.screenshot_storage_bucket || 'payment-evidence',
+                p.screenshot_storage_path,
+                120
+              );
+              screenshotSignedUrl = signed.signedUrl;
+              expiresInSeconds = signed.expiresInSeconds;
+            } catch {
+              screenshotSignedUrl = null;
+            }
+          }
+          return {
+            ...toAdminPaymentSummary(p, screenshotSignedUrl, expiresInSeconds),
+            job_number: job?.job_number ?? '—',
+            customer_name: job?.customer_name ?? null,
+            customer_phone: job?.customer_phone ?? null,
+            job_status: job?.status ?? 'submitted',
+            paper_size: job?.paper_size ?? 'A4',
+            print_mode: job?.print_mode ?? 'bw',
+            print_sides: job?.print_sides ?? 'single',
+            copies: job?.copies ?? 1,
+            physical_sheet_count: job?.physical_sheet_count ?? null,
+          };
+        })
+      );
+
+      const cashPendingJobs = allJobs
+        .filter(
+          (j) =>
+            j.status !== 'draft' &&
+            !isTerminalStatus(j.status) &&
+            j.payment_status === 'unpaid' &&
+            (j.payment_method === 'cash' || j.payment_method === null)
+        )
+        .slice(0, 50)
+        .map((j) => toAdminJobSummary(j));
 
       const metrics = computeAdminPrintDashboardMetrics(allJobs, allPayments, nowIso);
       const queue = buildAdminQueueItems(allJobs, printers, devices, nowIso);
@@ -3003,10 +3178,12 @@ export async function handleAdminPrintJobs(
           pagination: { page, pageSize, totalItems, totalPages },
           metrics,
           queue,
+          paymentVerifications,
+          cashPendingJobs,
           printers,
           devices: publicDevices,
           pricingRules,
-          paymentSettings,
+          paymentSettings: toAdminPaymentSettingsSummary(paymentSettings),
           upiQrSignedUrl,
           serverNowIso: nowIso,
         },
@@ -3057,12 +3234,7 @@ export async function handleAdminPrintJobs(
               signedDownloadUrl = null;
             }
           }
-          return {
-            ...file,
-            signedDownloadUrl,
-            expiresInSeconds,
-            previewSupported: isPreviewableMimeType(file.detected_mime_type),
-          };
+          return toAdminFileSummary(file, signedDownloadUrl, expiresInSeconds);
         })
       );
 
@@ -3083,18 +3255,14 @@ export async function handleAdminPrintJobs(
               screenshotSignedUrl = null;
             }
           }
-          return {
-            ...payment,
-            screenshotSignedUrl,
-            expiresInSeconds,
-          };
+          return toAdminPaymentSummary(payment, screenshotSignedUrl, expiresInSeconds);
         })
       );
 
       return jsonResponse(
         200,
         {
-          job,
+          job: toAdminJobSummary(job),
           files: filesWithUrls,
           payments: paymentsWithUrls,
           attempts,
@@ -3160,6 +3328,27 @@ export async function handleAdminPrintJobs(
         throw new AppError(400, 'INVALID_RATE', 'Rate and minimum charge must be non-negative numbers.');
       }
 
+      const parsedValidFrom = parseOptionalIsoDateTime(body.validFrom, 'validFrom');
+      const parsedValidUntil = parseOptionalIsoDateTime(body.validUntil, 'validUntil');
+
+      let existingTarget: Awaited<ReturnType<NonNullable<typeof adapter.getPricingRuleById>>> = null;
+      if (ruleId && adapter.getPricingRuleById) {
+        existingTarget = await adapter.getPricingRuleById(ruleId);
+        if (!existingTarget) {
+          throw new AppError(404, 'RULE_NOT_FOUND', 'Pricing rule not found.');
+        }
+      }
+
+      const effectiveValidFrom = parsedValidFrom ?? existingTarget?.valid_from ?? nowIso;
+      const effectiveValidUntil = parsedValidUntil !== undefined ? parsedValidUntil : (existingTarget?.valid_until ?? null);
+      if (effectiveValidUntil !== null && Date.parse(effectiveValidUntil) <= Date.parse(effectiveValidFrom)) {
+        throw new AppError(
+          400,
+          'INVALID_VALIDITY_WINDOW',
+          'validUntil must be strictly later than validFrom.'
+        );
+      }
+
       const roundedRate = Math.round(rate * 100) / 100;
       const roundedMinimum = Math.round(minimumCharge * 100) / 100;
 
@@ -3189,6 +3378,8 @@ export async function handleAdminPrintJobs(
             rate: roundedRate,
             minimum_charge: roundedMinimum,
             is_active: isActive,
+            valid_from: effectiveValidFrom,
+            valid_until: effectiveValidUntil,
           })
         : await adapter.createPricingRule({
             ruleName,
@@ -3199,6 +3390,8 @@ export async function handleAdminPrintJobs(
             rate: roundedRate,
             minimumCharge: roundedMinimum,
             isActive,
+            validFrom: effectiveValidFrom,
+            validUntil: effectiveValidUntil,
           });
 
       await adapter.appendEvent({
@@ -3216,6 +3409,8 @@ export async function handleAdminPrintJobs(
           pricing_unit: saved.pricing_unit,
           rate: saved.rate,
           minimum_charge: saved.minimum_charge,
+          valid_from: saved.valid_from,
+          valid_until: saved.valid_until,
         },
       });
 

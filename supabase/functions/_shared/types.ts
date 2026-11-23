@@ -431,6 +431,8 @@ export interface Scan2PrintBackendAdapter {
     rate: number;
     minimumCharge: number;
     isActive: boolean;
+    validFrom?: string | null;
+    validUntil?: string | null;
   }): Promise<PrintPricingRule>;
   updatePricingRule?(ruleId: string, patch: Partial<PrintPricingRule>): Promise<PrintPricingRule>;
 

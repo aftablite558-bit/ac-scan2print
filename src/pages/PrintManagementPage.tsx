@@ -40,6 +40,7 @@ import {
   DEVICE_STATUS_META,
   JOB_STATUS_META,
   PAYMENT_STATUS_META,
+  canAdminApproveCashJob,
   canAdminReleaseJobToQueue,
   canAdminRetryOrReconcileJob,
   createEmptyPricingRuleDraft,
@@ -54,6 +55,7 @@ import {
   validatePricingRuleDraft,
   type AdminDeviceSummary,
   type AdminJobDetailResponse,
+  type AdminPaymentVerificationItem,
   type AdminPrintDashboardMetrics,
   type AdminPrintJobSummary,
   type AdminPrintPaymentSettings,
@@ -72,6 +74,8 @@ interface AdminPrintJobsListResponse {
   pagination?: { page: number; pageSize: number; totalItems: number; totalPages: number };
   metrics?: AdminPrintDashboardMetrics;
   queue?: AdminQueueItem[];
+  paymentVerifications?: AdminPaymentVerificationItem[];
+  cashPendingJobs?: AdminPrintJobSummary[];
   printers?: AdminPrinterSummary[];
   devices?: AdminDeviceSummary[];
   pricingRules?: AdminPrintPricingRule[];
@@ -103,20 +107,26 @@ const EMPTY_METRICS: AdminPrintDashboardMetrics = {
   pendingVerificationPayments: 0,
 };
 
+type PrintTabId = 'overview' | 'jobs' | 'queue' | 'payments' | 'pricing' | 'upi' | 'devices';
+
 export const PrintManagementPage: React.FC = () => {
   const { route, navigate, invokeAdminEdgeFunction, showToast } = useAdmin();
-  const activeTab = (route.sub as 'jobs' | 'queue' | 'devices' | 'pricing') || 'jobs';
+  const activeTab = (route.sub as PrintTabId) || 'overview';
+  const navTabId: Exclude<PrintTabId, 'devices'> = activeTab === 'devices' ? 'overview' : activeTab;
 
   // List & Dashboard State
   const [jobs, setJobs] = useState<AdminPrintJobSummary[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pageSize: 15, totalItems: 0, totalPages: 1 });
   const [metrics, setMetrics] = useState<AdminPrintDashboardMetrics>(EMPTY_METRICS);
   const [queueItems, setQueueItems] = useState<AdminQueueItem[]>([]);
+  const [paymentVerifications, setPaymentVerifications] = useState<AdminPaymentVerificationItem[]>([]);
+  const [cashPendingJobs, setCashPendingJobs] = useState<AdminPrintJobSummary[]>([]);
   const [printers, setPrinters] = useState<AdminPrinterSummary[]>([]);
   const [devices, setDevices] = useState<AdminDeviceSummary[]>([]);
   const [pricingRules, setPricingRules] = useState<AdminPrintPricingRule[]>([]);
   const [paymentSettings, setPaymentSettings] = useState<AdminPrintPaymentSettings | null>(null);
   const [upiQrSignedUrl, setUpiQrSignedUrl] = useState<string | null>(null);
+  const [verifyPrinterChoice, setVerifyPrinterChoice] = useState<Record<string, string>>({});
 
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -208,6 +218,8 @@ export const PrintManagementPage: React.FC = () => {
     if (res.pagination) setPagination(res.pagination);
     setMetrics(res.metrics ?? EMPTY_METRICS);
     setQueueItems(Array.isArray(res.queue) ? res.queue : []);
+    setPaymentVerifications(Array.isArray(res.paymentVerifications) ? res.paymentVerifications : []);
+    setCashPendingJobs(Array.isArray(res.cashPendingJobs) ? res.cashPendingJobs : []);
     setPrinters(Array.isArray(res.printers) ? res.printers : []);
     setDevices(Array.isArray(res.devices) ? res.devices : []);
     setPricingRules(Array.isArray(res.pricingRules) ? res.pricingRules : []);
@@ -357,6 +369,8 @@ export const PrintManagementPage: React.FC = () => {
         pricingUnit: ruleDraft.printSides === 'duplex' ? 'per_physical_sheet' : ruleDraft.pricingUnit,
         rate: Number(ruleDraft.rate),
         minimumCharge: Number(ruleDraft.minimumCharge),
+        validFrom: ruleDraft.validFrom.trim() ? new Date(ruleDraft.validFrom).toISOString() : undefined,
+        validUntil: ruleDraft.validUntil.trim() ? new Date(ruleDraft.validUntil).toISOString() : null,
         isActive: ruleDraft.isActive,
       });
       setRuleEditorOpen(false);
@@ -493,13 +507,20 @@ export const PrintManagementPage: React.FC = () => {
 
       {/* Tabs */}
       <TabsNav
-        activeId={activeTab}
+        activeId={navTabId}
         onNavigate={(href) => navigate(href)}
         items={[
-          { id: 'jobs', label: 'Jobs & Dashboard', href: '#/print-management/jobs', count: metrics.totalJobs },
-          { id: 'queue', label: 'Print Queue', href: '#/print-management/queue', count: queueItems.length },
-          { id: 'devices', label: 'Agent Devices', href: '#/print-management/devices', count: devices.length },
-          { id: 'pricing', label: 'Pricing & UPI', href: '#/print-management/pricing', count: pricingRules.length },
+          { id: 'overview', label: 'Overview', href: '#/print-management/overview' },
+          { id: 'jobs', label: 'All Print Jobs', href: '#/print-management/jobs', count: metrics.totalJobs },
+          { id: 'queue', label: 'Queue', href: '#/print-management/queue', count: queueItems.length },
+          {
+            id: 'payments',
+            label: 'Payment Verification',
+            href: '#/print-management/payments',
+            count: paymentVerifications.length + cashPendingJobs.length,
+          },
+          { id: 'pricing', label: 'Pricing Rules', href: '#/print-management/pricing', count: pricingRules.length },
+          { id: 'upi', label: 'UPI Settings', href: '#/print-management/upi' },
         ]}
       />
 
@@ -521,10 +542,10 @@ export const PrintManagementPage: React.FC = () => {
 
       <div ref={tabPanelRef} className="space-y-5">
         {/* ================================================================
-            TAB 1: PRINT JOBS DASHBOARD & MANAGEMENT
+            TAB 1: OVERVIEW (REAL-TIME KPIs + ACTION ALERTS + AGENT DEVICES)
            ================================================================ */}
-        {activeTab === 'jobs' && (
-          <>
+        {(activeTab === 'overview' || activeTab === 'devices') && (
+          <div className="space-y-5">
             {/* Real DB KPI Metrics */}
             <section aria-label="Print Jobs Metrics" className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
               {[
@@ -610,6 +631,84 @@ export const PrintManagementPage: React.FC = () => {
                 );
               })}
             </section>
+
+            {/* Quick Operational Routing Cards */}
+            <section aria-label="Operational Shortcuts" className="grid grid-cols-1 md:grid-cols-3 gap-3.5">
+              <div className="glass-pane rounded-[20px] p-4 flex flex-col justify-between gap-3">
+                <div>
+                  <div className="text-[13.5px] font-bold flex items-center gap-2">
+                    <QrCode size={15} className="text-[var(--info)]" />
+                    <span>Payment Verification Queue</span>
+                  </div>
+                  <p className="text-[12px] text-[var(--muted)] mt-1">
+                    {paymentVerifications.length} UPI screenshot/UTR claim(s) and {cashPendingJobs.length} unpaid counter job(s) waiting.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate('#/print-management/payments')}
+                  className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold self-start cursor-pointer"
+                >
+                  Open Payment Verification
+                </button>
+              </div>
+
+              <div className="glass-pane rounded-[20px] p-4 flex flex-col justify-between gap-3">
+                <div>
+                  <div className="text-[13.5px] font-bold flex items-center gap-2">
+                    <ListOrdered size={15} className="text-[var(--accent-text)]" />
+                    <span>Queue & Release Control</span>
+                  </div>
+                  <p className="text-[12px] text-[var(--muted)] mt-1">
+                    {readyForReleaseJobs.length} paid & approved job(s) ready to release · {queueItems.length} in active/attention queue.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => navigate('#/print-management/queue')}
+                  className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold self-start cursor-pointer"
+                >
+                  Open Print Queue
+                </button>
+              </div>
+
+              <div className="glass-pane rounded-[20px] p-4 flex flex-col justify-between gap-3">
+                <div>
+                  <div className="text-[13.5px] font-bold flex items-center gap-2">
+                    <Sliders size={15} className={pricingRules.length === 0 ? 'text-[var(--warn)]' : 'text-[var(--good)]'} />
+                    <span>Pricing & UPI Readiness</span>
+                  </div>
+                  <p className="text-[12px] text-[var(--muted)] mt-1">
+                    {pricingRules.filter((r) => r.is_active).length} active pricing rule(s) · UPI{' '}
+                    {paymentSettings?.upi_enabled ? `enabled (${paymentSettings.upi_id || 'handle set'})` : 'not enabled yet'}.
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={() => navigate('#/print-management/pricing')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer"
+                  >
+                    Pricing Rules
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('#/print-management/upi')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer"
+                  >
+                    UPI Settings
+                  </button>
+                </div>
+              </div>
+            </section>
+          </div>
+        )}
+
+        {/* ================================================================
+            TAB 2: ALL PRINT JOBS (SEARCH, FILTERS & PAGINATION)
+           ================================================================ */}
+        {activeTab === 'jobs' && (
+          <>
 
             {/* Filters */}
             <section
@@ -1203,10 +1302,10 @@ export const PrintManagementPage: React.FC = () => {
         )}
 
         {/* ================================================================
-            TAB 3: PRINT AGENT DEVICES & PRINTER BINDINGS
+            PRINT AGENT DEVICES & PRINTER BINDINGS (SHOWN IN OVERVIEW & /devices)
            ================================================================ */}
-        {activeTab === 'devices' && (
-          <div className="space-y-4">
+        {(activeTab === 'overview' || activeTab === 'devices') && (
+          <div className="space-y-4 pt-1">
             {!hasAnyOnlineDevice && (
               <div className="rounded-[18px] p-4 bg-[var(--warn-soft)] border border-[var(--warn)]/30 text-[var(--warn)] flex items-start gap-3 text-[13px]">
                 <AlertTriangle size={18} className="shrink-0 mt-0.5" />
@@ -1427,408 +1526,762 @@ export const PrintManagementPage: React.FC = () => {
         )}
 
         {/* ================================================================
-            TAB 4: PRICING RULES & SHOP UPI SETTINGS
+            TAB 4: PAYMENT VERIFICATION (UPI QUEUE & CASH COUNTER)
            ================================================================ */}
-        {activeTab === 'pricing' && (
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5 items-start">
-            {/* Pricing Rules Column */}
-            <section className="lg:col-span-7 glass-pane rounded-[22px] p-5 space-y-4">
+        {activeTab === 'payments' && (
+          <div className="space-y-5">
+            {/* Section A: Pending UPI Verifications */}
+            <section className="glass-pane rounded-[22px] p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
-                  <h2 className="text-[17px] font-bold">Configured Print Pricing Rules</h2>
+                  <h2 className="text-[17px] font-bold flex items-center gap-2">
+                    <QrCode size={17} className="text-[var(--info)]" />
+                    <span>UPI Payment Verification Queue ({paymentVerifications.length})</span>
+                  </h2>
                   <p className="text-[12.5px] text-[var(--muted)]">
-                    Authoritative server rates. Duplex rules strictly bill <strong>per_physical_sheet</strong> (ceil(pages/2)).
+                    Inspect customer UTR references & payment screenshots. Approving UPI automatically marks the job Paid and qualifies it for the Print Queue.
                   </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setRuleDraft(createEmptyPricingRuleDraft());
-                    setRuleEditorOpen(true);
-                  }}
-                  className="btn-primary px-3.5 py-2 rounded-full text-[12.5px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Plus size={14} />
-                  <span>Add Pricing Rule</span>
-                </button>
               </div>
 
-              {ruleEditorOpen && (
-                <form
-                  onSubmit={handleSavePricingRule}
-                  className="rounded-[18px] p-4 bg-[var(--card-2)] border border-[var(--line)] space-y-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="text-[14px] font-bold">
-                      {ruleDraft.ruleId ? 'Edit Pricing Rule' : 'New Pricing Rule'}
-                    </div>
-                    <button
-                      type="button"
-                      onClick={() => setRuleEditorOpen(false)}
-                      className="text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
-                      aria-label="Close pricing rule form"
-                    >
-                      <X size={16} />
-                    </button>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="sm:col-span-2">
-                      <label htmlFor="rule-name-input" className="block text-[12px] font-semibold mb-1">
-                        Rule Name
-                      </label>
-                      <input
-                        id="rule-name-input"
-                        type="text"
-                        value={ruleDraft.ruleName}
-                        onChange={(e) =>
-                          setRuleDraft((d) => ({ ...d, ruleName: e.target.value }))
-                        }
-                        placeholder="e.g., A4 B&W Duplex Standard"
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                      />
-                    </div>
-
-                    <div>
-                      <label htmlFor="rule-paper-select" className="block text-[12px] font-semibold mb-1">
-                        Paper Size
-                      </label>
-                      <select
-                        id="rule-paper-select"
-                        value={ruleDraft.paperSize}
-                        onChange={(e) =>
-                          setRuleDraft((d) => ({ ...d, paperSize: e.target.value as PaperSize }))
-                        }
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                      >
-                        <option value="A4">A4</option>
-                        <option value="A3">A3</option>
-                        <option value="Legal">Legal</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="rule-mode-select" className="block text-[12px] font-semibold mb-1">
-                        Print Mode
-                      </label>
-                      <select
-                        id="rule-mode-select"
-                        value={ruleDraft.printMode}
-                        onChange={(e) =>
-                          setRuleDraft((d) => ({ ...d, printMode: e.target.value as PrintMode }))
-                        }
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                      >
-                        <option value="bw">Black & White</option>
-                        <option value="colour">Colour</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="rule-sides-select" className="block text-[12px] font-semibold mb-1">
-                        Print Sides
-                      </label>
-                      <select
-                        id="rule-sides-select"
-                        value={ruleDraft.printSides}
-                        onChange={(e) => {
-                          const nextSides = e.target.value as PrintSides;
-                          setRuleDraft((d) => ({
-                            ...d,
-                            printSides: nextSides,
-                            pricingUnit:
-                              nextSides === 'duplex' ? 'per_physical_sheet' : d.pricingUnit,
-                          }));
-                        }}
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                      >
-                        <option value="single">Single-Sided</option>
-                        <option value="duplex">Duplex (Double-Sided)</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label htmlFor="rule-unit-select" className="block text-[12px] font-semibold mb-1">
-                        Billing Unit
-                      </label>
-                      <select
-                        id="rule-unit-select"
-                        value={ruleDraft.pricingUnit}
-                        disabled={ruleDraft.printSides === 'duplex'}
-                        onChange={(e) =>
-                          setRuleDraft((d) => ({
-                            ...d,
-                            pricingUnit: e.target.value as PricingUnit,
-                          }))
-                        }
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px] disabled:opacity-65"
-                      >
-                        <option value="per_printed_page">Per Printed Page</option>
-                        <option value="per_physical_sheet">Per Physical Sheet</option>
-                      </select>
-                      {ruleDraft.printSides === 'duplex' && (
-                        <div className="text-[11px] text-[var(--info)] mt-1">
-                          Locked to Per Physical Sheet for Duplex accuracy.
-                        </div>
-                      )}
-                    </div>
-
-                    <div>
-                      <label htmlFor="rule-rate-input" className="block text-[12px] font-semibold mb-1">
-                        Rate (₹ INR)
-                      </label>
-                      <input
-                        id="rule-rate-input"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={ruleDraft.rate}
-                        onChange={(e) =>
-                          setRuleDraft((d) => ({ ...d, rate: e.target.value }))
-                        }
-                        placeholder="Set rate by shop owner"
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                      />
-                    </div>
-
-                    <div>
-                      <label htmlFor="rule-min-input" className="block text-[12px] font-semibold mb-1">
-                        Minimum Charge (₹ INR)
-                      </label>
-                      <input
-                        id="rule-min-input"
-                        type="number"
-                        min="0"
-                        step="0.01"
-                        value={ruleDraft.minimumCharge}
-                        onChange={(e) =>
-                          setRuleDraft((d) => ({ ...d, minimumCharge: e.target.value }))
-                        }
-                        className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                      />
-                    </div>
-                  </div>
-
-                  <label className="inline-flex items-center gap-2 text-[13px] font-medium cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={ruleDraft.isActive}
-                      onChange={(e) =>
-                        setRuleDraft((d) => ({ ...d, isActive: e.target.checked }))
-                      }
-                    />
-                    <span>Rule Active (automatically supersedes any older active rule for this combination)</span>
-                  </label>
-
-                  <div className="flex items-center justify-end gap-2">
-                    <button
-                      type="button"
-                      onClick={() => setRuleEditorOpen(false)}
-                      className="btn-ghost px-3.5 py-1.5 rounded-[10px] text-[12.5px] cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="submit"
-                      disabled={actionBusy}
-                      className="btn-primary px-4 py-1.5 rounded-[10px] text-[12.5px] font-semibold cursor-pointer disabled:opacity-50"
-                    >
-                      Save Rule
-                    </button>
-                  </div>
-                </form>
-              )}
-
-              {pricingRules.length === 0 ? (
-                <div className="rounded-[16px] p-6 bg-[var(--card-2)] border border-[var(--line)] text-center space-y-1.5">
-                  <Sliders size={22} className="mx-auto text-[var(--muted)]" />
-                  <div className="text-[14px] font-semibold">No Pricing Rules Configured</div>
+              {paymentVerifications.length === 0 ? (
+                <div className="rounded-[16px] p-6 bg-[var(--card-2)] border border-[var(--line)] text-center space-y-1">
+                  <CheckCircle2 size={22} className="mx-auto text-[var(--good)]" />
+                  <div className="text-[14px] font-semibold">No Pending UPI Verifications</div>
                   <p className="text-[12.5px] text-[var(--muted)]">
-                    Configure real shop prices per paper size, colour mode, and sides. Jobs safely reject submission until a matching active rule exists.
+                    Customer UPI claims submitted with a 12-digit UTR & payment screenshot will appear here.
                   </p>
                 </div>
               ) : (
-                <div className="space-y-2.5">
-                  {pricingRules.map((rule) => (
-                    <div
-                      key={rule.id}
-                      className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
-                    >
-                      <div>
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-bold text-[13.5px]">{rule.rule_name}</span>
-                          <span
-                            className="px-2 py-0.5 rounded-full text-[11px] font-semibold"
-                            style={{
-                              color: rule.is_active ? 'var(--good)' : 'var(--muted)',
-                              background: rule.is_active ? 'var(--good-soft)' : 'var(--card-1)',
-                            }}
-                          >
-                            {rule.is_active ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
-                        <div className="text-[12px] text-[var(--ink-2)] mt-0.5">
-                          {rule.paper_size} · {rule.print_mode === 'colour' ? 'Colour' : 'B&W'} ·{' '}
-                          {rule.print_sides === 'duplex' ? 'Duplex' : 'Single'} ·{' '}
-                          <span className="font-semibold text-[var(--ink)]">
-                            {formatCurrencyInr(rule.rate)}
-                          </span>{' '}
-                          /{' '}
-                          {rule.pricing_unit === 'per_physical_sheet' ? 'physical sheet' : 'page'}{' '}
-                          (min {formatCurrencyInr(rule.minimum_charge)})
-                        </div>
-                      </div>
+                <div className="space-y-3">
+                  {paymentVerifications.map((item) => {
+                    const chosenPrinter =
+                      verifyPrinterChoice[item.id] ?? (eligiblePrinters[0]?.id ?? '');
+                    return (
+                      <div
+                        key={item.id}
+                        className="rounded-[16px] p-4 bg-[var(--card-2)] border border-[var(--line)] flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-start gap-3.5 min-w-0">
+                          {item.screenshotSignedUrl ? (
+                            <a
+                              href={item.screenshotSignedUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open UPI screenshot in full size"
+                              className="shrink-0"
+                            >
+                              <img
+                                src={item.screenshotSignedUrl}
+                                alt={`UPI screenshot for ${item.job_number}`}
+                                className="w-20 h-20 object-cover rounded-[12px] border border-[var(--line)] bg-white"
+                              />
+                            </a>
+                          ) : (
+                            <div className="w-20 h-20 rounded-[12px] border border-dashed border-[var(--line)] flex items-center justify-center text-[11px] text-[var(--muted)] shrink-0 text-center px-1">
+                              No screenshot
+                            </div>
+                          )}
 
-                      <div className="flex items-center gap-2 shrink-0">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setRuleDraft(pricingRuleToDraft(rule));
-                            setRuleEditorOpen(true);
-                          }}
-                          className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium inline-flex items-center gap-1 cursor-pointer"
-                        >
-                          <Edit3 size={13} />
-                          <span>Edit</span>
-                        </button>
-                        <button
-                          type="button"
-                          disabled={actionBusy}
-                          onClick={() =>
-                            void executeProtectedAction(async () => {
-                              await invokeAdminEdgeFunction('admin-print-jobs', {
-                                action: 'pricing_toggle',
-                                ruleId: rule.id,
-                                isActive: !rule.is_active,
-                              });
-                              showToast(
-                                `Rule ${rule.is_active ? 'deactivated' : 'activated'}.`,
-                                'good'
-                              );
-                            })
-                          }
-                          className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
-                        >
-                          {rule.is_active ? 'Disable' : 'Activate'}
-                        </button>
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-bold text-[14px]">{item.job_number}</span>
+                              <span className="text-[13px] font-semibold text-[var(--accent-text)] tabular-nums">
+                                {formatCurrencyInr(item.amount)}
+                              </span>
+                              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--info-soft)] text-[var(--info)]">
+                                UPI Pending Verify
+                              </span>
+                            </div>
+                            <div className="text-[12.5px] text-[var(--ink-2)]">
+                              {item.customer_name || 'Walk-in Customer'}
+                              {item.customer_phone ? ` · ${item.customer_phone}` : ''}
+                              {' · '}
+                              {item.paper_size} · {item.print_mode === 'colour' ? 'Colour' : 'B&W'} ·{' '}
+                              {item.print_sides === 'duplex' ? 'Duplex' : 'Single'} × {item.copies}
+                            </div>
+                            <div className="text-[12px] font-mono text-[var(--ink)]">
+                              UTR / Ref: {item.transaction_reference || 'Not provided'}
+                            </div>
+                            <div className="text-[11.5px] text-[var(--muted)]">
+                              Submitted {formatDateTime(item.submitted_at ?? item.created_at)}
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          <select
+                            aria-label={`Select optional auto-release printer for ${item.job_number}`}
+                            value={chosenPrinter}
+                            onChange={(e) =>
+                              setVerifyPrinterChoice((prev) => ({
+                                ...prev,
+                                [item.id]: e.target.value,
+                              }))
+                            }
+                            disabled={actionBusy}
+                            className="rounded-[10px] bg-[var(--card-1)] border border-[var(--line)] px-2.5 py-1.5 text-[12px]"
+                          >
+                            <option value="">Qualify only (assign printer later)</option>
+                            {eligiblePrinters.map((p) => (
+                              <option key={p.id} value={p.id}>
+                                Auto-release: {p.printer_name}
+                              </option>
+                            ))}
+                          </select>
+
+                          <button
+                            type="button"
+                            disabled={actionBusy}
+                            onClick={() =>
+                              setConfirmConfig({
+                                title: `Verify UPI Payment for ${item.job_number}`,
+                                description: chosenPrinter
+                                  ? `Confirm ${formatCurrencyInr(item.amount)} UPI receipt (UTR: ${
+                                      item.transaction_reference || 'N/A'
+                                    })? This will mark the job Paid, Approved, and immediately release it to the selected printer queue.`
+                                  : `Confirm ${formatCurrencyInr(item.amount)} UPI receipt (UTR: ${
+                                      item.transaction_reference || 'N/A'
+                                    })? This will mark the job Paid and Approved.`,
+                                confirmLabel: chosenPrinter ? 'Verify & Release' : 'Verify UPI',
+                                tone: 'primary',
+                                onConfirm: async () => {
+                                  await executeProtectedAction(async () => {
+                                    await invokeAdminEdgeFunction('admin-verify-payment', {
+                                      paymentId: item.id,
+                                      decision: 'approve',
+                                      ...(chosenPrinter ? { printerId: chosenPrinter } : {}),
+                                    });
+                                    showToast(`UPI verified for ${item.job_number}.`, 'good');
+                                  });
+                                },
+                              })
+                            }
+                            className="btn-primary px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer disabled:opacity-50"
+                          >
+                            {chosenPrinter ? 'Verify & Release' : 'Verify UPI'}
+                          </button>
+
+                          <button
+                            type="button"
+                            disabled={actionBusy}
+                            onClick={() =>
+                              setConfirmConfig({
+                                title: `Reject UPI Claim for ${item.job_number}`,
+                                description:
+                                  'Reset payment_status to unpaid so the customer can re-submit a valid UTR or pay cash at the counter.',
+                                confirmLabel: 'Reject UPI',
+                                tone: 'danger',
+                                requireReason: true,
+                                reasonLabel: 'Rejection Reason',
+                                reasonPlaceholder: 'e.g., UTR not matched / blurry screenshot',
+                                onConfirm: async (reason) => {
+                                  await executeProtectedAction(async () => {
+                                    await invokeAdminEdgeFunction('admin-verify-payment', {
+                                      paymentId: item.id,
+                                      decision: 'reject',
+                                      reason,
+                                    });
+                                    showToast(`UPI claim rejected for ${item.job_number}.`, 'good');
+                                  });
+                                },
+                              })
+                            }
+                            className="px-3 py-1.5 rounded-[10px] text-[12px] font-semibold bg-[var(--bad-soft)] text-[var(--bad)] cursor-pointer disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
+
+                          <button
+                            type="button"
+                            onClick={() => openJobDetail(item.job_id)}
+                            className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
+                          >
+                            Inspect
+                          </button>
+                        </div>
                       </div>
-                    </div>
-                  ))}
+                    );
+                  })}
                 </div>
               )}
             </section>
 
-            {/* Shop UPI & Payment Settings Column */}
-            <section className="lg:col-span-5 glass-pane rounded-[22px] p-5 space-y-4">
+            {/* Section B: Counter Cash Payment Settlement & Explicit Approval */}
+            <section className="glass-pane rounded-[22px] p-5 space-y-4">
               <div>
-                <h2 className="text-[17px] font-bold">Shop UPI & QR Payment Settings</h2>
+                <h2 className="text-[17px] font-bold flex items-center gap-2">
+                  <Banknote size={17} className="text-[var(--good)]" />
+                  <span>Counter Cash & Unpaid Jobs ({cashPendingJobs.length})</span>
+                </h2>
                 <p className="text-[12.5px] text-[var(--muted)]">
-                  Displayed to customers at checkout. Stored privately in Supabase `payment-assets`.
+                  Cash orders require explicit Admin <strong>Confirm Cash Received</strong> and explicit <strong>Approve Job</strong> before queue release.
                 </p>
               </div>
 
-              <form onSubmit={handleSavePaymentSettings} className="space-y-3.5">
-                <div>
-                  <label htmlFor="upi-display-name" className="block text-[12px] font-semibold mb-1">
-                    Counter / Shop Display Name
-                  </label>
-                  <input
-                    id="upi-display-name"
-                    type="text"
-                    value={upiDisplayName}
-                    onChange={(e) => setUpiDisplayName(e.target.value)}
-                    className="w-full rounded-[11px] bg-[var(--card-2)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                  />
+              {cashPendingJobs.length === 0 ? (
+                <div className="rounded-[16px] p-6 bg-[var(--card-2)] border border-[var(--line)] text-center text-[13px] text-[var(--muted)]">
+                  No unpaid cash jobs waiting at the counter.
                 </div>
-
-                <div>
-                  <label htmlFor="upi-id-input" className="block text-[12px] font-semibold mb-1">
-                    Shop UPI ID (VPA)
-                  </label>
-                  <input
-                    id="upi-id-input"
-                    type="text"
-                    value={upiId}
-                    onChange={(e) => setUpiId(e.target.value)}
-                    placeholder="e.g., amancomputer@upi"
-                    className="w-full rounded-[11px] bg-[var(--card-2)] border border-[var(--line)] px-3 py-2 text-[13px] font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="upi-instructions-input" className="block text-[12px] font-semibold mb-1">
-                    Customer Payment Instructions
-                  </label>
-                  <textarea
-                    id="upi-instructions-input"
-                    rows={3}
-                    value={upiInstructions}
-                    onChange={(e) => setUpiInstructions(e.target.value)}
-                    placeholder="Pay exact total and upload screenshot + 12-digit UTR..."
-                    className="w-full rounded-[11px] bg-[var(--card-2)] border border-[var(--line)] px-3 py-2 text-[13px]"
-                  />
-                </div>
-
-                <label className="flex items-center gap-2 text-[13px] font-medium cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={upiEnabled}
-                    onChange={(e) => setUpiEnabled(e.target.checked)}
-                  />
-                  <span>Enable Customer UPI Payments</span>
-                </label>
-
-                <div className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-2.5">
-                  <div className="flex items-center justify-between text-[12.5px] font-semibold">
-                    <span>Shop UPI QR Image</span>
-                    {paymentSettings?.upi_qr_storage_path && (
-                      <button
-                        type="button"
-                        onClick={() => setUploadedQrStoragePath(null)}
-                        className="text-[11.5px] text-[var(--bad)] hover:underline cursor-pointer"
+              ) : (
+                <div className="space-y-2.5">
+                  {cashPendingJobs.map((job) => {
+                    const statusMeta = getJobStatusMeta(job.status);
+                    return (
+                      <div
+                        key={job.id}
+                        className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
                       >
-                        Remove QR on Save
-                      </button>
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-bold text-[13.5px]">{job.job_number}</span>
+                            <span className="font-semibold text-[13px] tabular-nums text-[var(--accent-text)]">
+                              {formatCurrencyInr(job.final_amount)}
+                            </span>
+                            <span
+                              className="px-2 py-0.5 rounded-full text-[11px] font-semibold"
+                              style={{ color: statusMeta.colorVar, background: statusMeta.bgVar }}
+                            >
+                              {statusMeta.label}
+                            </span>
+                          </div>
+                          <div className="text-[12px] text-[var(--muted)] mt-0.5">
+                            {job.customer_name || 'Walk-in Customer'}
+                            {job.customer_phone ? ` · ${job.customer_phone}` : ''}
+                            {' · '}
+                            {job.paper_size} · {job.print_mode === 'colour' ? 'Colour' : 'B&W'} ·{' '}
+                            {job.print_sides} × {job.copies}
+                          </div>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 shrink-0">
+                          {job.final_amount !== null && (
+                            <button
+                              type="button"
+                              disabled={actionBusy}
+                              onClick={() =>
+                                setConfirmConfig({
+                                  title: `Confirm Cash Received for ${job.job_number}`,
+                                  description: `Record ${formatCurrencyInr(
+                                    job.final_amount
+                                  )} cash payment received at counter?`,
+                                  confirmLabel: 'Confirm Cash Paid',
+                                  tone: 'primary',
+                                  onConfirm: async () => {
+                                    await executeProtectedAction(async () => {
+                                      await invokeAdminEdgeFunction('admin-confirm-cash', {
+                                        jobId: job.id,
+                                      });
+                                      showToast(`Cash payment confirmed for ${job.job_number}.`, 'good');
+                                    });
+                                  },
+                                })
+                              }
+                              className="btn-primary px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer disabled:opacity-50"
+                            >
+                              Confirm Cash
+                            </button>
+                          )}
+
+                          {canAdminApproveCashJob(job) && (
+                            <button
+                              type="button"
+                              disabled={actionBusy}
+                              onClick={() =>
+                                setConfirmConfig({
+                                  title: `Approve Print Job ${job.job_number}`,
+                                  description:
+                                    'Explicitly approve this job for queue eligibility once counter payment is verified.',
+                                  confirmLabel: 'Approve Job',
+                                  tone: 'primary',
+                                  onConfirm: async () => {
+                                    await executeProtectedAction(async () => {
+                                      await invokeAdminEdgeFunction('admin-review-print-job', {
+                                        jobId: job.id,
+                                        action: 'approve',
+                                      });
+                                      showToast(`Job ${job.job_number} approved.`, 'good');
+                                    });
+                                  },
+                                })
+                              }
+                              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer disabled:opacity-50"
+                            >
+                              Approve Job
+                            </button>
+                          )}
+
+                          <button
+                            type="button"
+                            onClick={() => openJobDetail(job.id)}
+                            className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
+                          >
+                            Inspect
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </section>
+          </div>
+        )}
+
+        {/* ================================================================
+            TAB 5: PRICING RULES MANAGEMENT
+           ================================================================ */}
+        {activeTab === 'pricing' && (
+          <section className="glass-pane rounded-[22px] p-5 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-bold">Configured Print Pricing Rules</h2>
+                <p className="text-[12.5px] text-[var(--muted)]">
+                  Authoritative server rates. Duplex rules strictly bill <strong>per_physical_sheet</strong> (ceil(pages/2)). Only one rule may be active per Paper Size + Mode + Sides tuple.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  setRuleDraft(createEmptyPricingRuleDraft());
+                  setRuleEditorOpen(true);
+                }}
+                className="btn-primary px-3.5 py-2 rounded-full text-[12.5px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+              >
+                <Plus size={14} />
+                <span>Add Pricing Rule</span>
+              </button>
+            </div>
+
+            {ruleEditorOpen && (
+              <form
+                onSubmit={handleSavePricingRule}
+                className="rounded-[18px] p-4 bg-[var(--card-2)] border border-[var(--line)] space-y-3"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="text-[14px] font-bold">
+                    {ruleDraft.ruleId ? 'Edit Pricing Rule' : 'New Pricing Rule'}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setRuleEditorOpen(false)}
+                    className="text-[var(--muted)] hover:text-[var(--ink)] cursor-pointer"
+                    aria-label="Close pricing rule form"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                  <div className="sm:col-span-2 lg:col-span-3">
+                    <label htmlFor="rule-name-input" className="block text-[12px] font-semibold mb-1">
+                      Rule Name
+                    </label>
+                    <input
+                      id="rule-name-input"
+                      type="text"
+                      value={ruleDraft.ruleName}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, ruleName: e.target.value }))
+                      }
+                      placeholder="e.g., A4 B&W Duplex Standard"
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-paper-select" className="block text-[12px] font-semibold mb-1">
+                      Paper Size
+                    </label>
+                    <select
+                      id="rule-paper-select"
+                      value={ruleDraft.paperSize}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, paperSize: e.target.value as PaperSize }))
+                      }
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    >
+                      <option value="A4">A4</option>
+                      <option value="A3">A3</option>
+                      <option value="Legal">Legal</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-mode-select" className="block text-[12px] font-semibold mb-1">
+                      Print Mode
+                    </label>
+                    <select
+                      id="rule-mode-select"
+                      value={ruleDraft.printMode}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, printMode: e.target.value as PrintMode }))
+                      }
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    >
+                      <option value="bw">Black & White</option>
+                      <option value="colour">Colour</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-sides-select" className="block text-[12px] font-semibold mb-1">
+                      Print Sides
+                    </label>
+                    <select
+                      id="rule-sides-select"
+                      value={ruleDraft.printSides}
+                      onChange={(e) => {
+                        const nextSides = e.target.value as PrintSides;
+                        setRuleDraft((d) => ({
+                          ...d,
+                          printSides: nextSides,
+                          pricingUnit:
+                            nextSides === 'duplex' ? 'per_physical_sheet' : d.pricingUnit,
+                        }));
+                      }}
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    >
+                      <option value="single">Single-Sided</option>
+                      <option value="duplex">Duplex (Double-Sided)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-unit-select" className="block text-[12px] font-semibold mb-1">
+                      Billing Unit
+                    </label>
+                    <select
+                      id="rule-unit-select"
+                      value={ruleDraft.pricingUnit}
+                      disabled={ruleDraft.printSides === 'duplex'}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({
+                          ...d,
+                          pricingUnit: e.target.value as PricingUnit,
+                        }))
+                      }
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px] disabled:opacity-65"
+                    >
+                      <option value="per_printed_page">Per Printed Page</option>
+                      <option value="per_physical_sheet">Per Physical Sheet</option>
+                    </select>
+                    {ruleDraft.printSides === 'duplex' && (
+                      <div className="text-[11px] text-[var(--info)] mt-1">
+                        Locked to Per Physical Sheet for Duplex accuracy.
+                      </div>
                     )}
                   </div>
 
-                  {upiQrSignedUrl && uploadedQrStoragePath !== null && (
-                    <img
-                      src={upiQrSignedUrl}
-                      alt="Shop UPI QR Code"
-                      className="w-36 h-36 object-contain rounded-[10px] border border-[var(--line)] bg-white p-1"
-                    />
-                  )}
-
-                  {uploadedQrStoragePath && (
-                    <div className="text-[11.5px] text-[var(--good)] font-medium">
-                      New QR staged ({uploadedQrStoragePath}). Save settings to apply.
-                    </div>
-                  )}
-
-                  <label className="btn-ghost px-3 py-2 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer">
-                    <Upload size={13} />
-                    <span>{qrUploading ? 'Uploading QR...' : 'Upload New UPI QR (PNG/JPG)'}</span>
+                  <div>
+                    <label htmlFor="rule-rate-input" className="block text-[12px] font-semibold mb-1">
+                      Rate (₹ INR)
+                    </label>
                     <input
-                      type="file"
-                      accept="image/png,image/jpeg,image/webp"
-                      disabled={qrUploading}
-                      onChange={handleQrFileChange}
-                      className="sr-only"
+                      id="rule-rate-input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={ruleDraft.rate}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, rate: e.target.value }))
+                      }
+                      placeholder="Set rate by shop owner"
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
                     />
-                  </label>
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-min-input" className="block text-[12px] font-semibold mb-1">
+                      Minimum Charge (₹ INR)
+                    </label>
+                    <input
+                      id="rule-min-input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={ruleDraft.minimumCharge}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, minimumCharge: e.target.value }))
+                      }
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-valid-from" className="block text-[12px] font-semibold mb-1">
+                      Valid From (Optional)
+                    </label>
+                    <input
+                      id="rule-valid-from"
+                      type="datetime-local"
+                      value={ruleDraft.validFrom}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, validFrom: e.target.value }))
+                      }
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    />
+                  </div>
+
+                  <div>
+                    <label htmlFor="rule-valid-until" className="block text-[12px] font-semibold mb-1">
+                      Valid Until (Optional)
+                    </label>
+                    <input
+                      id="rule-valid-until"
+                      type="datetime-local"
+                      value={ruleDraft.validUntil}
+                      onChange={(e) =>
+                        setRuleDraft((d) => ({ ...d, validUntil: e.target.value }))
+                      }
+                      className="w-full rounded-[11px] bg-[var(--card-1)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                    />
+                  </div>
                 </div>
 
-                <button
-                  type="submit"
-                  disabled={actionBusy || qrUploading}
-                  className="btn-primary w-full py-2.5 rounded-[12px] text-[13px] font-semibold cursor-pointer disabled:opacity-50"
-                >
-                  Save Payment Settings
-                </button>
+                <label className="inline-flex items-center gap-2 text-[13px] font-medium cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={ruleDraft.isActive}
+                    onChange={(e) =>
+                      setRuleDraft((d) => ({ ...d, isActive: e.target.checked }))
+                    }
+                  />
+                  <span>Rule Active (automatically supersedes any older active rule for this combination)</span>
+                </label>
+
+                <div className="flex items-center justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setRuleEditorOpen(false)}
+                    className="btn-ghost px-3.5 py-1.5 rounded-[10px] text-[12.5px] cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={actionBusy}
+                    className="btn-primary px-4 py-1.5 rounded-[10px] text-[12.5px] font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    Save Rule
+                  </button>
+                </div>
               </form>
-            </section>
-          </div>
+            )}
+
+            {pricingRules.length === 0 ? (
+              <div className="rounded-[16px] p-6 bg-[var(--warn-soft)] border border-[var(--warn)]/25 text-center space-y-1.5">
+                <Sliders size={22} className="mx-auto text-[var(--warn)]" />
+                <div className="text-[14px] font-semibold">No Pricing Rules Configured</div>
+                <p className="text-[12.5px] text-[var(--ink-2)] max-w-[540px] mx-auto">
+                  No default prices are ever fabricated. Configure real shop prices per paper size, colour mode, and sides before customers submit jobs.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-2.5">
+                {pricingRules.map((rule) => (
+                  <div
+                    key={rule.id}
+                    className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                  >
+                    <div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-bold text-[13.5px]">{rule.rule_name}</span>
+                        <span
+                          className="px-2 py-0.5 rounded-full text-[11px] font-semibold"
+                          style={{
+                            color: rule.is_active ? 'var(--good)' : 'var(--muted)',
+                            background: rule.is_active ? 'var(--good-soft)' : 'var(--card-1)',
+                          }}
+                        >
+                          {rule.is_active ? 'Active' : 'Inactive'}
+                        </span>
+                      </div>
+                      <div className="text-[12px] text-[var(--ink-2)] mt-0.5">
+                        {rule.paper_size} · {rule.print_mode === 'colour' ? 'Colour' : 'B&W'} ·{' '}
+                        {rule.print_sides === 'duplex' ? 'Duplex' : 'Single'} ·{' '}
+                        <span className="font-semibold text-[var(--ink)]">
+                          {formatCurrencyInr(rule.rate)}
+                        </span>{' '}
+                        /{' '}
+                        {rule.pricing_unit === 'per_physical_sheet' ? 'physical sheet' : 'page'}{' '}
+                        (min {formatCurrencyInr(rule.minimum_charge)})
+                      </div>
+                      <div className="text-[11.5px] text-[var(--muted)] mt-0.5">
+                        Valid from {formatDateTime(rule.valid_from)}
+                        {rule.valid_until ? ` until ${formatDateTime(rule.valid_until)}` : ' (no expiry)'}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setRuleDraft(pricingRuleToDraft(rule));
+                          setRuleEditorOpen(true);
+                        }}
+                        className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium inline-flex items-center gap-1 cursor-pointer"
+                      >
+                        <Edit3 size={13} />
+                        <span>Edit</span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={actionBusy}
+                        onClick={() =>
+                          void executeProtectedAction(async () => {
+                            await invokeAdminEdgeFunction('admin-print-jobs', {
+                              action: 'pricing_toggle',
+                              ruleId: rule.id,
+                              isActive: !rule.is_active,
+                            });
+                            showToast(
+                              `Rule ${rule.is_active ? 'deactivated' : 'activated'}.`,
+                              'good'
+                            );
+                          })
+                        }
+                        className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
+                      >
+                        {rule.is_active ? 'Disable' : 'Activate'}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </section>
+        )}
+
+        {/* ================================================================
+            TAB 6: SHOP UPI & QR PAYMENT SETTINGS
+           ================================================================ */}
+        {activeTab === 'upi' && (
+          <section className="glass-pane rounded-[22px] p-5 max-w-[720px] space-y-4">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-bold">Shop UPI & QR Payment Settings</h2>
+                <p className="text-[12.5px] text-[var(--muted)]">
+                  Displayed to customers on the Scan2Print payment page. QR image is stored privately in Supabase `payment-assets` and served via short-lived signed URLs.
+                </p>
+              </div>
+              <span
+                className="px-2.5 py-1 rounded-full text-[11.5px] font-semibold"
+                style={{
+                  color: paymentSettings?.upi_enabled ? 'var(--good)' : 'var(--warn)',
+                  background: paymentSettings?.upi_enabled ? 'var(--good-soft)' : 'var(--warn-soft)',
+                }}
+              >
+                {paymentSettings?.upi_enabled ? 'UPI Enabled' : 'UPI Disabled'}
+              </span>
+            </div>
+
+            <form onSubmit={handleSavePaymentSettings} className="space-y-3.5">
+              <div>
+                <label htmlFor="upi-display-name" className="block text-[12px] font-semibold mb-1">
+                  Counter / Shop Display Name
+                </label>
+                <input
+                  id="upi-display-name"
+                  type="text"
+                  value={upiDisplayName}
+                  onChange={(e) => setUpiDisplayName(e.target.value)}
+                  className="w-full rounded-[11px] bg-[var(--card-2)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="upi-id-input" className="block text-[12px] font-semibold mb-1">
+                  Shop UPI ID (VPA)
+                </label>
+                <input
+                  id="upi-id-input"
+                  type="text"
+                  value={upiId}
+                  onChange={(e) => setUpiId(e.target.value)}
+                  placeholder="e.g., amancomputer@upi"
+                  className="w-full rounded-[11px] bg-[var(--card-2)] border border-[var(--line)] px-3 py-2 text-[13px] font-mono"
+                />
+              </div>
+
+              <div>
+                <label htmlFor="upi-instructions-input" className="block text-[12px] font-semibold mb-1">
+                  Customer Payment Instructions
+                </label>
+                <textarea
+                  id="upi-instructions-input"
+                  rows={3}
+                  value={upiInstructions}
+                  onChange={(e) => setUpiInstructions(e.target.value)}
+                  placeholder="Pay exact total and upload screenshot + 12-digit UTR..."
+                  className="w-full rounded-[11px] bg-[var(--card-2)] border border-[var(--line)] px-3 py-2 text-[13px]"
+                />
+              </div>
+
+              <label className="flex items-center gap-2 text-[13px] font-medium cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={upiEnabled}
+                  onChange={(e) => setUpiEnabled(e.target.checked)}
+                />
+                <span>Enable Customer UPI Payments</span>
+              </label>
+
+              <div className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-2.5">
+                <div className="flex items-center justify-between text-[12.5px] font-semibold">
+                  <span>
+                    Shop UPI QR Image{' '}
+                    <span className="text-[11.5px] font-normal text-[var(--muted)]">
+                      ({paymentSettings?.has_qr_configured ? 'Configured' : 'Not uploaded'})
+                    </span>
+                  </span>
+                  {paymentSettings?.has_qr_configured && (
+                    <button
+                      type="button"
+                      onClick={() => setUploadedQrStoragePath(null)}
+                      className="text-[11.5px] text-[var(--bad)] hover:underline cursor-pointer"
+                    >
+                      Remove QR on Save
+                    </button>
+                  )}
+                </div>
+
+                {upiQrSignedUrl && uploadedQrStoragePath !== null && (
+                  <img
+                    src={upiQrSignedUrl}
+                    alt="Shop UPI QR Code"
+                    className="w-40 h-40 object-contain rounded-[10px] border border-[var(--line)] bg-white p-1"
+                  />
+                )}
+
+                {uploadedQrStoragePath && (
+                  <div className="text-[11.5px] text-[var(--good)] font-medium">
+                    New QR image uploaded and staged. Save settings to publish.
+                  </div>
+                )}
+
+                <label className="btn-ghost px-3 py-2 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer">
+                  <Upload size={13} />
+                  <span>{qrUploading ? 'Uploading QR...' : 'Upload New UPI QR (PNG/JPG)'}</span>
+                  <input
+                    type="file"
+                    accept="image/png,image/jpeg,image/webp"
+                    disabled={qrUploading}
+                    onChange={handleQrFileChange}
+                    className="sr-only"
+                  />
+                </label>
+              </div>
+
+              <button
+                type="submit"
+                disabled={actionBusy || qrUploading}
+                className="btn-primary w-full py-2.5 rounded-[12px] text-[13px] font-semibold cursor-pointer disabled:opacity-50"
+              >
+                Save Payment Settings
+              </button>
+            </form>
+          </section>
         )}
       </div>
 

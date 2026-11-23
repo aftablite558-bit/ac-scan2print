@@ -88,8 +88,6 @@ export interface AdminPrintPaymentDetail {
   amount: number;
   currency: string;
   transaction_reference: string | null;
-  screenshot_storage_bucket: string | null;
-  screenshot_storage_path: string | null;
   screenshotSignedUrl: string | null;
   expiresInSeconds: number | null;
   submitted_at: string | null;
@@ -98,6 +96,18 @@ export interface AdminPrintPaymentDetail {
   rejection_reason: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AdminPaymentVerificationItem extends AdminPrintPaymentDetail {
+  job_number: string;
+  customer_name: string | null;
+  customer_phone: string | null;
+  job_status: JobStatus;
+  paper_size: PaperSize;
+  print_mode: PrintMode;
+  print_sides: PrintSides;
+  copies: number;
+  physical_sheet_count: number | null;
 }
 
 export interface AdminPrintJobAttempt {
@@ -149,8 +159,7 @@ export interface AdminPrintPaymentSettings {
   id: number;
   upi_enabled: boolean;
   upi_id: string | null;
-  upi_qr_storage_bucket: string;
-  upi_qr_storage_path: string | null;
+  has_qr_configured: boolean;
   display_name: string;
   payment_instructions: string;
   updated_at: string;
@@ -257,6 +266,8 @@ export interface PricingRuleFormDraft {
   pricingUnit: PricingUnit;
   rate: string;
   minimumCharge: string;
+  validFrom: string;
+  validUntil: string;
   isActive: boolean;
 }
 
@@ -418,6 +429,14 @@ export function isValidUpiHandle(upiId: string): boolean {
   return /^[a-zA-Z0-9._-]{2,64}@[a-zA-Z0-9.-]{2,64}$/.test(upiId.trim());
 }
 
+function isoToDateTimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (!Number.isFinite(d.getTime())) return '';
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
 export function createEmptyPricingRuleDraft(): PricingRuleFormDraft {
   return {
     ruleId: null,
@@ -428,6 +447,8 @@ export function createEmptyPricingRuleDraft(): PricingRuleFormDraft {
     pricingUnit: 'per_printed_page',
     rate: '',
     minimumCharge: '0',
+    validFrom: '',
+    validUntil: '',
     isActive: true,
   };
 }
@@ -442,6 +463,8 @@ export function pricingRuleToDraft(rule: AdminPrintPricingRule): PricingRuleForm
     pricingUnit: rule.print_sides === 'duplex' ? 'per_physical_sheet' : rule.pricing_unit,
     rate: String(rule.rate),
     minimumCharge: String(rule.minimum_charge),
+    validFrom: isoToDateTimeLocalValue(rule.valid_from),
+    validUntil: isoToDateTimeLocalValue(rule.valid_until),
     isActive: rule.is_active,
   };
 }
@@ -460,6 +483,21 @@ export function validatePricingRuleDraft(draft: PricingRuleFormDraft): string | 
   const minCharge = Number(draft.minimumCharge);
   if (draft.minimumCharge.trim() === '' || !Number.isFinite(minCharge) || minCharge < 0) {
     return 'Enter a valid non-negative minimum charge in INR.';
+  }
+  const hasFrom = draft.validFrom.trim() !== '';
+  const hasUntil = draft.validUntil.trim() !== '';
+  const fromMs = hasFrom ? Date.parse(draft.validFrom) : Date.now();
+  if (hasFrom && !Number.isFinite(fromMs)) {
+    return 'Enter a valid "Valid From" date and time.';
+  }
+  if (hasUntil) {
+    const untilMs = Date.parse(draft.validUntil);
+    if (!Number.isFinite(untilMs)) {
+      return 'Enter a valid "Valid Until" date and time.';
+    }
+    if (untilMs <= fromMs) {
+      return '"Valid Until" must be strictly after "Valid From".';
+    }
   }
   return null;
 }

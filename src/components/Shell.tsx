@@ -128,8 +128,8 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
     if (wallImgRef.current) {
       tl.fromTo(
         wallImgRef.current,
-        { scale: 1.12 },
-        { scale: 1.02, duration: dur(1.8), ease: 'expo.out', clearProps: 'transform' },
+        { scale: 1.08 },
+        { scale: 1.02, duration: dur(1.0), ease: 'expo.out', clearProps: 'transform' },
         0
       );
     }
@@ -137,24 +137,24 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       const el = sideRef.current;
       tl.fromTo(
         el,
-        { clipPath: clipInset(el, 0.85) },
-        { clipPath: clipInset(el, 0, 60), duration: dur(0.9), ease: 'expo.out', clearProps: 'clipPath' },
-        0.05
+        { clipPath: clipInset(el, 0.55) },
+        { clipPath: clipInset(el, 0, 60), duration: dur(0.5), ease: 'expo.out', clearProps: 'clipPath' },
+        0.02
       );
       const links = el.querySelectorAll<HTMLElement>('.snav-item');
       if (links.length) {
         tl.fromTo(
           links,
-          { opacity: 0, x: -12 },
+          { opacity: 0, x: -10 },
           {
             opacity: 1,
             x: 0,
-            duration: dur(0.5),
+            duration: dur(0.32),
             ease: 'power3.out',
-            stagger: dur(0.025),
+            stagger: dur(0.018),
             clearProps: 'transform,opacity',
           },
-          0.2
+          0.1
         );
       }
       if (snavPillRef.current && activeSide && snavTrackRef.current) {
@@ -166,11 +166,11 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
           { scaleY: 0.3, transformOrigin: `50% ${originY.toFixed(1)}px` },
           {
             scaleY: 1,
-            duration: dur(0.5),
+            duration: dur(0.35),
             ease: 'back.out(2)',
             clearProps: 'transform,transformOrigin',
           },
-          0.3
+          0.15
         );
       }
     }
@@ -178,23 +178,23 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       const el = topbarRef.current;
       tl.fromTo(
         el,
-        { y: -16, clipPath: clipInset(el, 0.9) },
+        { y: -12, clipPath: clipInset(el, 0.55) },
         {
           y: 0,
           clipPath: clipInset(el, 0, 60),
-          duration: dur(0.85),
+          duration: dur(0.5),
           ease: 'expo.out',
           clearProps: 'transform,clipPath',
         },
-        0.12
+        0.06
       );
     }
     if (tabbarRef.current) {
       tl.fromTo(
         tabbarRef.current,
-        { y: 100 },
-        { y: 0, duration: dur(0.8), ease: 'expo.out', clearProps: 'transform' },
-        0.2
+        { y: 60 },
+        { y: 0, duration: dur(0.45), ease: 'expo.out', clearProps: 'transform' },
+        0.1
       );
     }
   }, []);
@@ -454,7 +454,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
         {
           id: 'print-management',
           label: 'Print Management',
-          href: '#/print-management/jobs',
+          href: '#/print-management/overview',
           icon: FileCheck2,
         },
         {
@@ -490,7 +490,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
   const breadcrumb = (() => {
     const mapMain: Record<string, { label: string; href: string }> = {
       home: { label: 'Overview', href: '#/home' },
-      'print-management': { label: 'Print Management', href: '#/print-management/jobs' },
+      'print-management': { label: 'Print Management', href: '#/print-management/overview' },
       hardware: { label: 'Hardware & Printers', href: '#/hardware' },
       cms: { label: 'CMS', href: '#/cms/business' },
       enquiries: { label: 'Enquiries', href: '#/enquiries' },
@@ -500,10 +500,13 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
       help: { label: 'Help', href: '#/help' },
     };
     const subLabels: Record<string, string> = {
-      jobs: 'Jobs & Dashboard',
-      queue: 'Print Queue',
+      overview: 'Overview',
+      jobs: 'All Print Jobs',
+      queue: 'Queue',
+      payments: 'Payment Verification',
+      pricing: 'Pricing Rules',
+      upi: 'UPI Settings',
       devices: 'Agent Devices',
-      pricing: 'Pricing & UPI',
       printers: 'Printer Registry',
       discovery: 'Agent Discovery Prep',
       checklist: 'Audit Checklist',
@@ -1025,7 +1028,7 @@ export const Shell: React.FC<{ children: React.ReactNode }> = ({ children }) => 
           <span ref={tabbarPillRef} className="tabbar__pill" aria-hidden="true" />
           {[
             { id: 'home', label: 'Overview', href: '#/home', icon: Home },
-            { id: 'print-management', label: 'Print', href: '#/print-management/jobs', icon: FileCheck2 },
+            { id: 'print-management', label: 'Print', href: '#/print-management/overview', icon: FileCheck2 },
             { id: 'enquiries', label: 'Enquiries', href: '#/enquiries', icon: Inbox },
             { id: 'bihar-updates', label: 'Bihar', href: '#/bihar-updates', icon: Landmark },
           ].map((item) => {

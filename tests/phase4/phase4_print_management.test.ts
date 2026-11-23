@@ -1213,3 +1213,481 @@ test('[P4-09] Supabase config.toml and additive service_role grant migration enf
   assert.match(grantsSql, /GRANT\s+SELECT,\s*INSERT,\s*UPDATE\s+ON\s+TABLE\s+public\.print_jobs\s+TO\s+service_role/i);
 });
 
+function collectObjectKeys(value: unknown, acc: Set<string> = new Set()): Set<string> {
+  if (Array.isArray(value)) {
+    for (const item of value) collectObjectKeys(item, acc);
+  } else if (value && typeof value === 'object') {
+    for (const [k, v] of Object.entries(value)) {
+      acc.add(k);
+      collectObjectKeys(v, acc);
+    }
+  }
+  return acc;
+}
+
+test('[P4-10] Admin API responses strip secret hashes and raw storage bucket/path internals from DTOs', async () => {
+  const { sim, adapter, adminJwt } = await setupAdminWorkspace();
+
+  await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      {
+        action: 'pricing_save',
+        ruleName: 'A4 BW Standard',
+        paperSize: 'A4',
+        printMode: 'bw',
+        printSides: 'single',
+        pricingUnit: 'per_printed_page',
+        rate: 2,
+        minimumCharge: 0,
+        isActive: true,
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+
+  // Enroll an agent device to make sure credential_hash is also absent from list responses
+  await handleAgentEnroll(
+    makeReq(
+      'POST',
+      'https://edge.local/agent-enroll',
+      { deviceName: 'Counter-Sanitized-PC', activateImmediately: true },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+
+  // Configure UPI QR in private storage
+  const prepQr = await handleAdminUpdatePaymentSettings(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-update-payment-settings',
+      { action: 'prepare_qr_upload', filename: 'qr.png', mimeType: 'image/png', fileSizeBytes: 12 },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  const qrPrep = (await prepQr.json()) as { signedUrl: string; storagePath: string };
+  sim.uploadObjectWithSignedUrl(qrPrep.signedUrl, buildMinimalPng());
+
+  const savePayRes = await handleAdminUpdatePaymentSettings(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-update-payment-settings',
+      { action: 'update', upiEnabled: true, upiId: 'aman@upi', upiQrStoragePath: qrPrep.storagePath },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(savePayRes.status, 200);
+  const savePayJson = (await savePayRes.json()) as { settings: { has_qr_configured: boolean } };
+  assert.equal(savePayJson.settings.has_qr_configured, true);
+
+  // Customer creates job and submits UPI evidence
+  const job = await createAndFinalizeCustomerJob(sim, { customerName: 'Secret Check Customer', pages: 3 });
+  const evPrep = await handleSubmitUpiPayment(
+    makeReq(
+      'POST',
+      'https://edge.local/submit-upi-payment',
+      { action: 'prepare_evidence_upload', filename: 'ev.png', mimeType: 'image/png', fileSizeBytes: 12 },
+      { 'x-tracking-token': job.trackingToken }
+    ),
+    adapter,
+    ENV
+  );
+  const evPrepJson = (await evPrep.json()) as { signedUrl: string; evidenceStoragePath: string };
+  sim.uploadObjectWithSignedUrl(evPrepJson.signedUrl, buildMinimalPng());
+  await handleSubmitUpiPayment(
+    makeReq(
+      'POST',
+      'https://edge.local/submit-upi-payment',
+      {
+        paymentMethod: 'upi',
+        transactionReference: 'UTR1234567890',
+        evidenceStoragePath: evPrepJson.evidenceStoragePath,
+        evidenceMimeType: 'image/png',
+      },
+      { 'x-tracking-token': job.trackingToken }
+    ),
+    adapter,
+    ENV
+  );
+
+  const listRes = await handleAdminPrintJobs(
+    makeReq('POST', 'https://edge.local/admin-print-jobs', { action: 'list' }, { Authorization: `Bearer ${adminJwt}` }),
+    adapter,
+    ENV
+  );
+  assert.equal(listRes.status, 200);
+  const listJson = await listRes.json();
+
+  const detailRes = await handleAdminPrintJobs(
+    makeReq('POST', 'https://edge.local/admin-print-jobs', { action: 'detail', jobId: job.jobId }, { Authorization: `Bearer ${adminJwt}` }),
+    adapter,
+    ENV
+  );
+  assert.equal(detailRes.status, 200);
+  const detailJson = await detailRes.json();
+
+  const overrideRes = await handleAdminReviewPrintJob(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-review-print-job',
+      { jobId: job.jobId, action: 'override_price', finalAmount: 10, reason: 'Counter rounding discount' },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(overrideRes.status, 200);
+  const overrideJson = await overrideRes.json();
+
+  const forbiddenKeys = [
+    'tracking_token_hash',
+    'draft_upload_secret_hash',
+    'submission_idempotency_key',
+    'storage_path',
+    'storage_bucket',
+    'screenshot_storage_path',
+    'screenshot_storage_bucket',
+    'upi_qr_storage_path',
+    'upi_qr_storage_bucket',
+    'idempotency_key',
+    'credential_hash',
+  ];
+
+  for (const payload of [savePayJson, listJson, detailJson, overrideJson]) {
+    const keys = collectObjectKeys(payload);
+    for (const forbidden of forbiddenKeys) {
+      assert.equal(keys.has(forbidden), false, `Forbidden internal field '${forbidden}' leaked in Admin DTO`);
+    }
+  }
+});
+
+test('[P4-11] Pagination bounds, filter matrix, and dedicated Payment Verification queues work accurately', async () => {
+  const { sim, adapter, adminJwt } = await setupAdminWorkspace();
+  await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      {
+        action: 'pricing_save',
+        ruleName: 'A4 BW Base',
+        paperSize: 'A4',
+        printMode: 'bw',
+        printSides: 'single',
+        pricingUnit: 'per_printed_page',
+        rate: 2,
+        minimumCharge: 0,
+        isActive: true,
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      {
+        action: 'pricing_save',
+        ruleName: 'A3 Colour Duplex',
+        paperSize: 'A3',
+        printMode: 'colour',
+        printSides: 'duplex',
+        pricingUnit: 'per_physical_sheet',
+        rate: 20,
+        minimumCharge: 0,
+        isActive: true,
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+
+  const enableUpiRes = await handleAdminUpdatePaymentSettings(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-update-payment-settings',
+      { action: 'update', upiEnabled: true, upiId: 'aman@upi' },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(enableUpiRes.status, 200);
+
+  // Create 3 jobs: 1 UPI pending verification, 2 cash unpaid
+  const upiJob = await createAndFinalizeCustomerJob(sim, {
+    customerName: 'A3 Colour User',
+    paperSize: 'A3',
+    printMode: 'colour',
+    printSides: 'duplex',
+    pages: 4,
+  });
+  const paySub = await handleSubmitUpiPayment(
+    makeReq(
+      'POST',
+      'https://edge.local/submit-upi-payment',
+      { paymentMethod: 'upi', transactionReference: 'UTRPAGE000111' },
+      { 'x-tracking-token': upiJob.trackingToken }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(paySub.status, 201);
+  await createAndFinalizeCustomerJob(sim, { customerName: 'Cash User One', pages: 2 });
+  await createAndFinalizeCustomerJob(sim, { customerName: 'Cash User Two', pages: 3 });
+
+  // Boundary checks: page <= 0 clamps to 1, out-of-range page=999 clamps to totalPages, pageSize=200 clamps to 100
+  const clampedPageRes = await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      { action: 'list', page: 0, pageSize: 200 },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(clampedPageRes.status, 200);
+  const clampedJson = (await clampedPageRes.json()) as {
+    pagination: { page: number; pageSize: number; totalItems: number; totalPages: number };
+    paymentVerifications: Array<{ job_id: string; transaction_reference: string | null }>;
+    cashPendingJobs: Array<{ id: string }>;
+  };
+  assert.equal(clampedJson.pagination.page, 1);
+  assert.equal(clampedJson.pagination.pageSize, 100);
+  assert.equal(clampedJson.pagination.totalItems, 3);
+  assert.equal(clampedJson.paymentVerifications.length, 1);
+  assert.equal(clampedJson.paymentVerifications[0].transaction_reference, 'UTRPAGE000111');
+  assert.equal(clampedJson.cashPendingJobs.length, 2);
+
+  // Out-of-range page=999 clamps safely and still exposes paymentVerifications regardless of page
+  const overflowPageRes = await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      { action: 'list', page: 999, pageSize: 1 },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(overflowPageRes.status, 200);
+  const overflowJson = (await overflowPageRes.json()) as {
+    jobs: Array<unknown>;
+    pagination: { page: number; totalPages: number };
+    paymentVerifications: Array<unknown>;
+    cashPendingJobs: Array<unknown>;
+  };
+  assert.equal(overflowJson.pagination.page, 3);
+  assert.equal(overflowJson.jobs.length, 1);
+  assert.equal(overflowJson.paymentVerifications.length, 1);
+  assert.equal(overflowJson.cashPendingJobs.length, 2);
+
+  // Filter by printMode=colour + paperSize=A3 + printSides=duplex + search by UTR
+  const filteredRes = await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      {
+        action: 'list',
+        printMode: 'colour',
+        paperSize: 'A3',
+        printSides: 'duplex',
+        paymentStatus: 'pending_verification',
+        search: 'UTRPAGE000111',
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(filteredRes.status, 200);
+  const filteredJson = (await filteredRes.json()) as { jobs: Array<{ id: string }> };
+  assert.equal(filteredJson.jobs.length, 1);
+  assert.equal(filteredJson.jobs[0].id, upiJob.jobId);
+});
+
+test('[P4-12] Pricing validity window validation, cash UUID validation, and archived/unapproved printer guards are strictly enforced', async () => {
+  const { sim, adapter, adminJwt } = await setupAdminWorkspace();
+
+  // 1. Reject invalid pricing validity window (validUntil <= validFrom)
+  const badWindowRes = await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      {
+        action: 'pricing_save',
+        ruleName: 'Bad Window Rule',
+        paperSize: 'A4',
+        printMode: 'bw',
+        printSides: 'single',
+        pricingUnit: 'per_printed_page',
+        rate: 2,
+        minimumCharge: 0,
+        validFrom: '2026-12-01T10:00:00.000Z',
+        validUntil: '2026-12-01T09:00:00.000Z',
+        isActive: true,
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(badWindowRes.status, 400);
+  assert.equal(((await badWindowRes.json()) as { error: { code: string } }).error.code, 'INVALID_VALIDITY_WINDOW');
+
+  // 2. Accept and persist valid pricing validity window
+  const goodWindowRes = await handleAdminPrintJobs(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-print-jobs',
+      {
+        action: 'pricing_save',
+        ruleName: 'Valid Promo Window',
+        paperSize: 'A4',
+        printMode: 'bw',
+        printSides: 'single',
+        pricingUnit: 'per_printed_page',
+        rate: 2,
+        minimumCharge: 0,
+        validFrom: '2026-11-01T00:00:00.000Z',
+        validUntil: '2027-01-01T00:00:00.000Z',
+        isActive: true,
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(goodWindowRes.status, 201);
+  const goodWindowJson = (await goodWindowRes.json()) as {
+    rule: { valid_from: string; valid_until: string | null };
+  };
+  assert.equal(goodWindowJson.rule.valid_from, '2026-11-01T00:00:00.000Z');
+  assert.equal(goodWindowJson.rule.valid_until, '2027-01-01T00:00:00.000Z');
+
+  // 3. Reject malformed UUID in admin-confirm-cash before any DB query
+  const badCashRes = await handleAdminConfirmCash(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-confirm-cash',
+      { jobId: 'not-a-valid-uuid' },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(badCashRes.status, 400);
+  assert.equal(((await badCashRes.json()) as { error: { code: string } }).error.code, 'INVALID_JOB_ID');
+
+  // 4. Reject releasing or retrying a job onto an archived or unapproved printer
+  const pCreateRes = await handleAdminPrinters(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-printers',
+      {
+        action: 'create',
+        printerName: 'Soon Archived Printer',
+        connectionType: 'usb',
+        supportsColour: 'no',
+        supportsDuplex: 'no',
+        supportedPaperSizes: ['A4'],
+        isEnabled: true,
+      },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  const { printer: archivedPrinter } = (await pCreateRes.json()) as { printer: { id: string } };
+  await adapter.updatePrinter!(archivedPrinter.id, {
+    archived_at: new Date().toISOString(),
+    is_enabled: false,
+    printer_status: 'disabled',
+  });
+
+  const pendingPrinter = await adapter.createPrinter!({
+    printerName: 'Pending Review Discovered',
+    printerModel: null,
+    systemPrinterName: 'DiscoveredPrinter1',
+    deviceId: null,
+    connectionType: 'usb',
+    supportedPaperSizes: ['A4'],
+    supportsColour: false,
+    supportsDuplex: false,
+    capabilitiesVerified: false,
+    printerStatus: 'online',
+    isEnabled: true,
+    isDefault: false,
+    discoverySource: 'agent',
+    approvalStatus: 'pending_review',
+    lastSeenAt: new Date().toISOString(),
+    lastVerifiedAt: null,
+    auditNotes: null,
+  });
+
+  const job = await createAndFinalizeCustomerJob(sim, { customerName: 'Printer Guard Customer', pages: 2 });
+  await handleAdminConfirmCash(
+    makeReq('POST', 'https://edge.local/admin-confirm-cash', { jobId: job.jobId }, { Authorization: `Bearer ${adminJwt}` }),
+    adapter,
+    ENV
+  );
+  await handleAdminReviewPrintJob(
+    makeReq('POST', 'https://edge.local/admin-review-print-job', { jobId: job.jobId, action: 'approve' }, { Authorization: `Bearer ${adminJwt}` }),
+    adapter,
+    ENV
+  );
+
+  const releaseArchived = await handleAdminReleasePrintJob(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-release-print-job',
+      { jobId: job.jobId, printerId: archivedPrinter.id },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(releaseArchived.status, 409);
+  assert.equal(((await releaseArchived.json()) as { error: { code: string } }).error.code, 'PRINTER_UNAVAILABLE');
+
+  const releasePending = await handleAdminReleasePrintJob(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-release-print-job',
+      { jobId: job.jobId, printerId: pendingPrinter.id },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(releasePending.status, 409);
+  assert.equal(((await releasePending.json()) as { error: { code: string } }).error.code, 'PRINTER_UNAVAILABLE');
+
+  await adapter.updateJob(job.jobId, { status: 'failed' });
+  const retryPending = await handleAdminRetryPrintJob(
+    makeReq(
+      'POST',
+      'https://edge.local/admin-retry-print-job',
+      { jobId: job.jobId, action: 'retry', printerId: pendingPrinter.id, reason: 'Testing pending printer rejection' },
+      { Authorization: `Bearer ${adminJwt}` }
+    ),
+    adapter,
+    ENV
+  );
+  assert.equal(retryPending.status, 409);
+  assert.equal(((await retryPending.json()) as { error: { code: string } }).error.code, 'PRINTER_UNAVAILABLE');
+});
+
+

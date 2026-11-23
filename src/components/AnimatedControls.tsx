@@ -29,6 +29,10 @@ export const TabsNav: React.FC<{
 
   useLayoutEffect(() => {
     syncLine(mountedRef.current);
+    const activeEl = itemRefs.current[activeId];
+    if (activeEl && typeof activeEl.scrollIntoView === 'function') {
+      activeEl.scrollIntoView({ behavior: 'auto', block: 'nearest', inline: 'nearest' });
+    }
     mountedRef.current = true;
   }, [activeId, items.length]);
 
@@ -49,9 +53,9 @@ export const TabsNav: React.FC<{
     <nav
       ref={navRef}
       aria-label="Sections"
-      className={`border-b border-[var(--line)] overflow-x-auto ${className}`}
+      className={`border-b border-[var(--line)] overflow-x-auto custom-scroll ${className}`}
     >
-      <div className="relative flex items-center gap-6 min-w-max">
+      <div className="relative flex items-center gap-4 sm:gap-6 min-w-max pr-3">
         <span ref={lineRef} className="tabs__line" aria-hidden="true" />
         {items.map((t) => {
           const active = activeId === t.id;
@@ -66,7 +70,7 @@ export const TabsNav: React.FC<{
                 e.preventDefault();
                 onNavigate(t.href);
               }}
-              className={`relative z-10 pb-3 text-[14px] font-semibold inline-flex items-center gap-2 whitespace-nowrap transition-colors ${
+              className={`relative z-10 pb-3 text-[13px] sm:text-[14px] font-semibold inline-flex items-center gap-1.5 sm:gap-2 whitespace-nowrap transition-colors ${
                 active
                   ? 'text-[var(--ink)]'
                   : 'text-[var(--muted)] hover:text-[var(--ink)]'
@@ -74,7 +78,7 @@ export const TabsNav: React.FC<{
             >
               <span>{t.label}</span>
               {t.count !== undefined && (
-                <span className="tab-badge px-2 py-0.5 rounded-full bg-[var(--card-2)] text-[11.5px] tabular-nums">
+                <span className="tab-badge px-2 py-0.5 rounded-full bg-[var(--card-2)] text-[11px] sm:text-[11.5px] tabular-nums">
                   {t.count}
                 </span>
               )}

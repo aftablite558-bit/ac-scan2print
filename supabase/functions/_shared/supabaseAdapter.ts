@@ -274,11 +274,20 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
     async listPrintJobs() {
       const { data, error } = await adminClient
         .from('print_jobs')
-        .select('*')
+        .select(
+          'id, job_number, customer_name, customer_phone, status, payment_status, payment_method, subtotal, final_amount, currency, paper_size, print_mode, print_sides, copies, orientation, scaling, requested_page_range, verified_page_count, physical_sheet_count, pricing_rule_id, price_override_reason, assigned_printer_id, rejection_reason, cancellation_reason, created_at, updated_at, submitted_at, approved_at, completed_at, expires_at'
+        )
         .order('created_at', { ascending: false })
         .limit(1000);
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
-      return (data ?? []) as PrintJob[];
+      return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
+        ...(row as unknown as PrintJob),
+        subtotal: row.subtotal !== null && row.subtotal !== undefined ? Number(row.subtotal) : null,
+        final_amount: row.final_amount !== null && row.final_amount !== undefined ? Number(row.final_amount) : null,
+        tracking_token_hash: null,
+        draft_upload_secret_hash: null,
+        submission_idempotency_key: null,
+      }));
     },
 
     async countActiveFilesForJob(jobId: string) {
@@ -391,6 +400,8 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
           rate: input.rate,
           minimum_charge: input.minimumCharge,
           is_active: input.isActive,
+          ...(input.validFrom ? { valid_from: input.validFrom } : {}),
+          valid_until: input.validUntil ?? null,
         })
         .select('*')
         .single();

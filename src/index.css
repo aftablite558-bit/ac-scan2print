@@ -244,6 +244,8 @@ body {
   display: inline-block;
   overflow: hidden;
   vertical-align: bottom;
+  padding-bottom: 0.14em;
+  margin-bottom: -0.14em;
 }
 .ch {
   display: inline-block;
