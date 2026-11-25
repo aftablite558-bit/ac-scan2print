@@ -906,22 +906,20 @@ or enumerated.
 
 ## Phase 4 --- Admin Print Management
 
-**Status:** Software Implemented (Pending Live Supabase Edge Deployment & Phase 5--7 Windows Agent Integration).
+Tasks: - Add Print Management module to existing admin sidebar. - Build
+queue dashboard. - Build job details and secure document preview. - Add
+page count and print setting review. - Add price confirmation. - Add
+approve/reject/hold actions. - Add cash/UPI manual payment status. - Add
+release-to-queue action. - Add cancel/retry/reprint controls with
+permissions. - Add event timeline and audit logs. - Add filters, search
+and pagination.
 
-Tasks:
-- [x] Add Print Management module (`#/print-management/*`) to existing admin sidebar and command palette.
-- [x] Build real-data Print Jobs Dashboard & Queue Control views (zero simulated counts or fabricated printing).
-- [x] Build Job Details modal with short-lived (`120s`) signed PDF/image preview & download, UPI evidence viewer, and immutable `print_events` / `print_job_attempts` timeline.
-- [x] Add page count, physical sheets (`ceil(pages/2)` for duplex), and print setting review.
-- [x] Add pricing rules CRUD (`per_physical_sheet` enforced on duplex) and Shop UPI / private QR asset settings.
-- [x] Add strict UPI (verification auto-qualifies job for Print Queue) vs Cash (confirm cash + explicit Admin approve) workflows and duplicate-approval guards.
-- [x] Add release-to-queue, cancel, retry/requeue controls with audit reasons and confirmation dialogs.
-- [x] Add Agent Device registration (`agent-enroll`), honest heartbeat status (`<= 90s`), and Pause / Revoke lifecycle controls.
-- [x] Add server/client search, filters (`status`, `paymentMethod`, `paymentStatus`, `printMode`, `printSides`, `paperSize`, date range, sort), and pagination.
+Deliverables: - Admin Print Manager. - Role/permission integration. -
+Operator workflow documentation.
 
-Deliverables: - Admin Print Manager (`PrintManagementPage`, `PrintJobDetailModal`, `ConfirmActionDialog`, `admin-print-jobs` Edge Function). - Single-admin Firebase UID + Supabase RBAC integration. - Phase 4 unit and backend integration tests (`npm run test:phase4`).
-
-Acceptance: - Operator can process a complete UPI or Cash job through approval and queue release. - Unapproved/unpaid jobs cannot enter agent queue (`409`). - Retry/requeue requires explicit authorized action with audit reason. - Every sensitive action writes immutable `print_events`. - Live production Edge deployment (`admin-print-jobs`, updated `handlers.ts`) and physical printing verification remain pending Phase 5--7 hardware rollout.
+Acceptance: - Operator can process a complete job. - Unapproved job
+cannot enter agent queue. - Reprint requires explicit authorized
+action. - Every sensitive action is auditable.
 
 ## Phase 5 --- Local Print Agent Prototype
 
@@ -1908,24 +1906,24 @@ multi-branch support are not MVP blockers.
 The admin information architecture is ready for implementation planning
 when:
 
--   [x] All proposed modules have an agreed purpose.
--   [x] Routes have been checked against the existing application
-    router (`#/print-management/{jobs,queue,devices,pricing}`).
--   [x] Existing authentication and RBAC capabilities have been
-    inspected (Firebase Auth + `public.print_admin_accounts` backend verification).
--   [x] Admin and operator permissions are mapped to actions.
--   [x] Customer routes (`customer-portal/`) are separate from protected admin routes.
--   [x] Print job state transitions are defined server-side (`handlers.ts`).
--   [x] Printer and device management responsibilities are separated (`#/hardware/printers` vs `#/print-management/devices`).
--   [x] Payment confirmation is restricted to authorized admin (`requireMvpAdmin`).
--   [x] Pricing rules distinguish pages from physical sheets (`per_physical_sheet` enforced on duplex).
--   [x] QR management uses only the permanent customer portal URL.
--   [x] Audit events are defined for sensitive operations (`print_events`).
--   [x] Reports and metrics use real stored data and documented calculations.
--   [x] Optional customer records are not made mandatory for the MVP.
--   [x] Empty, loading and error behavior is specified for each
+-   [ ] All proposed modules have an agreed purpose.
+-   [ ] Routes have been checked against the existing application
+    router.
+-   [ ] Existing authentication and RBAC capabilities have been
+    inspected.
+-   [ ] Admin and operator permissions are mapped to actions.
+-   [ ] Customer routes are separate from protected admin routes.
+-   [ ] Print job state transitions are defined server-side.
+-   [ ] Printer and device management responsibilities are separated.
+-   [ ] Payment confirmation is restricted to authorized staff.
+-   [ ] Pricing rules distinguish pages from physical sheets.
+-   [ ] QR management uses only the permanent customer portal URL.
+-   [ ] Audit events are defined for sensitive operations.
+-   [ ] Reports use real stored data and documented calculations.
+-   [ ] Optional customer records are not made mandatory for the MVP.
+-   [ ] Empty, loading and error behavior is specified for each
     functional page.
--   [x] No unrelated Aman Computer modules are changed.
+-   [ ] No unrelated Aman Computer modules are changed.
 
 ------------------------------------------------------------------------
 

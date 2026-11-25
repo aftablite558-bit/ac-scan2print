@@ -77,6 +77,18 @@ export class TestSupabaseSimulator {
     failed_retention_hours: 72,
     retention_policy_confirmed: false,
     auto_cleanup_enabled: false,
+    pilot_stage: 'dry_run',
+    pilot_intake_paused: false,
+    pilot_pause_reason: null,
+    pilot_target_jobs: 100,
+    pilot_go_live_approved_at: null,
+    pilot_checklist: {
+      shopPcInstalled: false,
+      printerTested: false,
+      qrPosterDisplayed: false,
+      staffTrained: false,
+      backupTested: false,
+    },
     updated_at: new Date().toISOString(),
     updated_by: null,
   };
@@ -189,7 +201,25 @@ export class TestSupabaseSimulator {
       },
 
       async getSystemSettings() {
-        return { ...sim.systemSettings };
+        return {
+          ...sim.systemSettings,
+          pilot_checklist: { ...sim.systemSettings.pilot_checklist },
+        };
+      },
+
+      async updateSystemSettings(patch) {
+        sim.systemSettings = {
+          ...sim.systemSettings,
+          ...patch,
+          pilot_checklist: patch.pilot_checklist
+            ? { ...patch.pilot_checklist }
+            : { ...sim.systemSettings.pilot_checklist },
+          updated_at: new Date(sim.nowMs).toISOString(),
+        };
+        return {
+          ...sim.systemSettings,
+          pilot_checklist: { ...sim.systemSettings.pilot_checklist },
+        };
       },
 
       async getPaymentSettings() {
@@ -204,6 +234,9 @@ export class TestSupabaseSimulator {
             max_copies: sim.systemSettings.max_copies,
             draft_retention_hours: sim.systemSettings.draft_retention_hours,
             completed_retention_hours: sim.systemSettings.completed_retention_hours,
+            pilot_stage: sim.systemSettings.pilot_stage,
+            pilot_intake_paused: sim.systemSettings.pilot_intake_paused,
+            pilot_pause_reason: sim.systemSettings.pilot_pause_reason,
           },
           printers: sim.printers
             .filter((p) => !p.archived_at && p.is_enabled)
@@ -669,6 +702,13 @@ export class TestSupabaseSimulator {
           .map((a) => ({ ...a }));
       },
 
+      async listAllAttempts(limit = 500) {
+        return [...sim.attempts]
+          .sort((a, b) => Date.parse(b.started_at) - Date.parse(a.started_at))
+          .slice(0, limit)
+          .map((a) => ({ ...a }));
+      },
+
       async getAttemptById(attemptId: string) {
         const found = sim.attempts.find((a) => a.id === attemptId);
         return found ? { ...found } : null;
@@ -842,6 +882,13 @@ export class TestSupabaseSimulator {
         };
         sim.cleanupLogs.push(log);
         return { ...log };
+      },
+
+      async listCleanupLogs(limit = 15) {
+        return [...sim.cleanupLogs]
+          .sort((a, b) => Date.parse(b.executed_at) - Date.parse(a.executed_at))
+          .slice(0, limit)
+          .map((l) => ({ ...l }));
       },
 
       async createSignedUploadUrl(bucket: string, path: string, expiresInSeconds: number) {

@@ -1,5 +1,6 @@
 import React from 'react';
 import {
+  AlertTriangle,
   ArrowRight,
   Clock,
   FileText,
@@ -38,6 +39,8 @@ export const PrintHomePage: React.FC = () => {
     );
   }
 
+  const intakePaused = Boolean(capabilities.intakePaused);
+
   return (
     <div className="space-y-5">
       {/* Primary Hero & Above-the-Fold Upload Action (Spec §7.1) */}
@@ -54,15 +57,34 @@ export const PrintHomePage: React.FC = () => {
           </p>
         </div>
 
+        {intakePaused && (
+          <div
+            role="status"
+            className="rounded-[16px] p-4 bg-[var(--warn-soft)] border border-[var(--warn)]/35 flex items-start gap-3"
+          >
+            <AlertTriangle size={18} className="text-[var(--warn)] shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="space-y-1 text-[13px]">
+              <div className="font-bold text-[var(--color-text-primary)]">
+                New Print Uploads Temporarily Paused
+              </div>
+              <p className="m-0 text-[var(--color-text-secondary)]">
+                {capabilities.pauseReason ||
+                  'Counter intake is temporarily paused for maintenance or rush queue clearance. You can still track existing orders below or ask at the counter.'}
+              </p>
+            </div>
+          </div>
+        )}
+
         <div className="flex flex-col sm:flex-row gap-2.5">
           <button
             type="button"
+            disabled={intakePaused}
             onClick={() => navigate('/quick-print/upload')}
-            className="portal-btn-primary px-5 py-3 text-[15px] flex-1 inline-flex items-center justify-center gap-2 cursor-pointer"
+            className="portal-btn-primary px-5 py-3 text-[15px] flex-1 inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Upload size={18} aria-hidden="true" />
-            <span>Upload Document</span>
-            <ArrowRight size={16} aria-hidden="true" />
+            <span>{intakePaused ? 'Uploads Temporarily Paused' : 'Upload Document'}</span>
+            {!intakePaused && <ArrowRight size={16} aria-hidden="true" />}
           </button>
 
           <button

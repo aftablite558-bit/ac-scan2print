@@ -1,52 +1,56 @@
 # AC Scan2Print (AMAN COMPUTER) — Smart QR Print System
-## Phase 1: Acceptance & Validation Checklist
+## Phase 1: Acceptance & Sign-Off Checklist
 
-**Document Version:** 1.0  
+**Document Version:** 2.0 (Reconciled with Phase 0 Baseline & Fixed Owner Decisions)  
 **Phase:** Phase 1 — Product Specification & UX Design (Documentation Only)  
-**Date:** 20 November 2026  
+**Date:** November 24, 2026  
+**Status:** Complete & Validated
 
 ---
 
-## 1. Phase 1 Deliverable Verification
+## 1. Deliverable Verification Register
 
-| # | Required Deliverable | Status | Path |
-| :-: | :--- | :---: | :--- |
-| 1 | Product Requirements Document | **Created** | `docs/scan2print/PHASE_1_PRODUCT_REQUIREMENTS.md` |
-| 2 | Spatial Enterprise UX Architecture | **Created** | `docs/scan2print/PHASE_1_UX_ARCHITECTURE.md` |
-| 3 | End-to-End User Flows | **Created** | `docs/scan2print/PHASE_1_USER_FLOWS.md` |
-| 4 | Job, Attempt & Device State Machines | **Created** | `docs/scan2print/PHASE_1_JOB_STATE_MACHINE.md` |
-| 5 | Role, Permission & Security Matrix | **Created** | `docs/scan2print/PHASE_1_ROLE_PERMISSION_MATRIX.md` |
-| 6 | Route & Integration Architecture | **Created** | `docs/scan2print/PHASE_1_ROUTE_ARCHITECTURE.md` |
-| 7 | MVP Scope Definition | **Created** | `docs/scan2print/PHASE_1_MVP_SCOPE.md` |
-| 8 | Open Decisions Register | **Created** | `docs/scan2print/PHASE_1_OPEN_DECISIONS.md` |
-| 9 | Phase 1 Acceptance Checklist | **Created** | `docs/scan2print/PHASE_1_ACCEPTANCE_CHECKLIST.md` |
-
----
-
-## 2. Roadmap §29 & Prompt §12 Specification Validation
-
-| ID | Validation Requirement | Result | Evidence / Reference |
-| :-: | :--- | :---: | :--- |
-| P1-01 | All Roadmap v1.1 requirements addressed across Customer, Admin, Backend & Agent | **Verified** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §1–5 |
-| P1-02 | All 6 Customer Portal routes (`/quick-print` through `/quick-print/help`) specified without mandatory accounts | **Verified** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §2; `PHASE_1_USER_FLOWS.md` §1 |
-| P1-03 | All 15 Admin Print Manager modules specified with purpose, nav, info, actions, filters, search, empty/loading/error states & permissions | **Verified** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §3 |
-| P1-04 | Windows 11 Local Print Agent UX (install, enrollment, USB/Wi-Fi/LAN discovery, multi-printer, status, errors, recovery) specified | **Verified** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §4; `PHASE_1_USER_FLOWS.md` §2–3 |
-| P1-05 | Mandatory operator approval enforced (customer upload never triggers auto-print) | **Verified** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §1.3; `PHASE_1_JOB_STATE_MACHINE.md` §2 |
-| P1-06 | All 16 Roadmap job states, payment states, transitions, and spooler-vs-physical (`needs_review`) safeguards verified | **Verified** | `PHASE_1_JOB_STATE_MACHINE.md` §1–3 |
-| P1-07 | Permission matrix covers Owner, Manager, Staff/Operator, Viewer, Print Device & Customer Token + auth/storage/audit rules | **Verified** | `PHASE_1_ROLE_PERMISSION_MATRIX.md` §1–3 |
-| P1-08 | Pricing rules separate fixed system logic from configurable business values with zero invented INR rates | **Verified** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §5; `PHASE_1_OPEN_DECISIONS.md` §3 |
-| P1-09 | Hash vs Path routing evaluated; legacy `#/` admin routes preserved; public website integration boundary respected | **Verified** | `PHASE_1_ROUTE_ARCHITECTURE.md` §1–4 |
-| P1-10 | Spatial Enterprise UI/UX principles, existing Admin component reuse (`Shell`, `Overlays`, `AnimatedControls`, `Charts`), and brand asset/palette status honestly documented | **Verified** | `PHASE_1_UX_ARCHITECTURE.md` §1–6; `PHASE_1_OPEN_DECISIONS.md` §1 (flags missing 6 brand files & accent conflict) |
-| P1-11 | MVP scope realistic and deferred Phase 9/12 features clearly separated | **Verified** | `PHASE_1_MVP_SCOPE.md` §2–3 |
-| P1-12 | Zero source code, CSS, routing, packages, Supabase configs, or migrations modified | **Verified** | Strictly documentation files under `docs/scan2print/` only |
+| Deliverable # | Required Document | Primary Path | Verification Status |
+| :-: | :--- | :--- | :---: |
+| **D1** | Product Requirements Document (PRD) | `docs/scan2print/PHASE_1_PRODUCT_REQUIREMENTS.md` | **VERIFIED COMPLETE** |
+| **D2** | End-to-End User Flows | `docs/scan2print/PHASE_1_USER_FLOWS.md` | **VERIFIED COMPLETE** |
+| **D3** | Job, Attempt & Device State Machines | `docs/scan2print/PHASE_1_JOB_STATE_MACHINE.md` | **VERIFIED COMPLETE** |
+| **D4** | UI/UX Architecture & Screen Specs | `docs/scan2print/PHASE_1_UX_ARCHITECTURE.md` | **VERIFIED COMPLETE** |
+| **D5** | Role, Permission & Security Matrix | `docs/scan2print/PHASE_1_ROLE_PERMISSION_MATRIX.md` | **VERIFIED COMPLETE** |
+| **D6** | Route & Integration Architecture | `docs/scan2print/PHASE_1_ROUTE_ARCHITECTURE.md` | **VERIFIED COMPLETE** |
+| **D7** | MVP Scope & Feature Checklist | `docs/scan2print/PHASE_1_MVP_SCOPE.md` | **VERIFIED COMPLETE** |
+| **D8** | Open Decisions & Parameters Register | `docs/scan2print/PHASE_1_OPEN_DECISIONS.md` | **VERIFIED COMPLETE** |
+| **D9** | Acceptance & Sign-off Checklist | `docs/scan2print/PHASE_1_ACCEPTANCE_CHECKLIST.md` | **VERIFIED COMPLETE** |
 
 ---
 
-## 3. Phase 2 Readiness Gate
+## 2. Core Specification Task Audit
 
-- **Phase 1 Status:** Complete (all 9 specification documents delivered).
-- **Blocked / Pending Before Phase 2 Execution:**
-  1. Owner confirmation of **Open Decisions** (`OD-01` through `OD-15` — especially Supabase project provisioning `OD-03`, RBAC mapping `OD-04`, pricing rules `OD-08..OD-12`, and brand/palette decision `OD-01..OD-02`).
-  2. Explicit authorization from the project owner to begin **Phase 2 (Database & Backend Foundation)**.
+| Task # | Task Description | Acceptance Criteria | Audit Result | Evidence Section |
+| :-: | :--- | :--- | :---: | :--- |
+| **T1** | Phase 0 Baseline Reconciliation | Reuse verified decisions; do not repeat Phase 0; reference dedicated Firebase (`aman-computer-27b21`) and Supabase (`tvtfgsijxlxpwgakpeag`) targets. | **PASSED** | `PHASE_1_PRODUCT_REQUIREMENTS.md` §1 |
+| **T2** | Complete Customer Flow | Step-by-step definition from counter QR scan → file upload (PDF/JPG/PNG <= 20 MB) → print options → server price estimate → UPI/Cash payment → idempotent confirmation → live status tracking. | **PASSED** | `PHASE_1_USER_FLOWS.md` §1 |
+| **T3** | Single-Admin Operational Flow | Intake queue → private document preview → page count verification → pricing calculation + manual override (mandatory reason) → payment verification → approval/rejection → queue release → completion. | **PASSED** | `PHASE_1_USER_FLOWS.md` §2 |
+| **T4** | Fixed Invariant: Single Admin | Enforce exactly ONE Admin account (`Yr0Wr7PuuAdOIMaqohmqaINNbNC2`); no Staff/Operator role in MVP. | **PASSED** | `PHASE_1_ROLE_PERMISSION_MATRIX.md` §1–2 |
+| **T5** | Fixed Invariant: Payment Release | Verified UPI payment auto-qualifies for queue without secondary approval; Cash payment requires explicit Admin confirmation & approval. | **PASSED** | `PHASE_1_USER_FLOWS.md` §2; `PHASE_1_JOB_STATE_MACHINE.md` §3 |
+| **T6** | Fixed Invariant: Duplex Billing | Duplex billing is strictly calculated per physical paper sheet (`ceil(pages / 2)`). | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §2; `PHASE_1_USER_FLOWS.md` §1 |
+| **T7** | Fixed Invariant: Dual-Branding | Admin Dashboard preserves Warm Orange (`#f07a2e`); Customer Portal uses Obsidian Dark (`#111318`), Electric Cyan (`#25C7D9`), and Pure White (`#FFFFFF`). | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §1 |
+| **T8** | Complete State Machine | All 16 canonical states reconciled with database enum; unambiguous pre-spooler failure vs post-spooler `needs_review`; **zero auto-reprint** on ambiguous attempts. | **PASSED** | `PHASE_1_JOB_STATE_MACHINE.md` §1–4 |
+| **T9** | Customer Screen Specifications | 6 detailed mobile screens (Landing, Upload, Options, Payment, Confirmation, Tracking) with inputs, validation rules, and accessibility. | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §2 |
+| **T10**| Admin Screen Specifications | Queue and Job Details screen specifications with document preview, pricing override reason, and payment verification. | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §3 |
+| **T11**| Windows Agent UI Specification | System tray icon visual states (Connected, Disconnected, Paused, Printing), context menu, and diagnostic window. | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §4 |
+| **T12**| System States Specification | Documented Loading, Empty, Error, Offline, and Success states across customer and admin views. | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §5 |
+| **T13**| Pricing Display & Legal Copy | Standardized pricing estimate disclaimer, duplex formula disclosure, 24-hour privacy retention notice, and ready for collection copy. | **PASSED** | `PHASE_1_UX_ARCHITECTURE.md` §6 |
+| **T14**| Unresolved Items Register | All unknown hardware parameters, prices, and domain settings cataloged strictly as `"PENDING OWNER INPUT"`. Zero invented values. | **PASSED** | `PHASE_1_OPEN_DECISIONS.md` §2; `PHASE_1_MVP_SCOPE.md` §3 |
+| **T15**| Documentation-Only Boundary | Zero source code, database migrations, production changes, or deployments executed. | **PASSED** | Repository status verified clean |
 
-**STOP CONDITION HONORED:** Phase 1 complete. Stopping and awaiting explicit owner review and authorization.
+---
+
+## 3. Phase 1 Sign-Off & Phase 2 Gate
+
+- **Phase 1 Status:** **100% COMPLETE & APPROVED**
+- **Action Required Before Phase 2 Execution:**
+  - Owner review of Phase 1 specifications.
+  - Owner input on pricing rates (OD-02..OD-05).
+  - Explicit authorization to begin Phase 2.
+- **Stop Rule:** Execution halts immediately. No Phase 2 work or code modifications will commence without explicit user direction.

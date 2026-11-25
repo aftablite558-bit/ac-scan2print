@@ -1335,11 +1335,12 @@ test('[P4-10] Admin API responses strip secret hashes and raw storage bucket/pat
   assert.equal(detailRes.status, 200);
   const detailJson = await detailRes.json();
 
+  const overrideJob = await createAndFinalizeCustomerJob(sim, { customerName: 'Override Check Customer', pages: 3 });
   const overrideRes = await handleAdminReviewPrintJob(
     makeReq(
       'POST',
       'https://edge.local/admin-review-print-job',
-      { jobId: job.jobId, action: 'override_price', finalAmount: 10, reason: 'Counter rounding discount' },
+      { jobId: overrideJob.jobId, action: 'override_price', finalAmount: 10, reason: 'Counter rounding discount' },
       { Authorization: `Bearer ${adminJwt}` }
     ),
     adapter,

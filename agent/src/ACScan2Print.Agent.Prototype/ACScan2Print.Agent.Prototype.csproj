@@ -1,0 +1,16 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ACScan2Print.Agent.Prototype</RootNamespace>
+    <AssemblyName>ACScan2Print.Agent.Prototype</AssemblyName>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ACScan2Print.Agent.Core\ACScan2Print.Agent.Core.csproj" />
+    <ProjectReference Include="..\ACScan2Print.Agent.Infrastructure\ACScan2Print.Agent.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

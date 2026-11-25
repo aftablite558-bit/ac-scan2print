@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Check, CheckCircle2, Copy, Plus, Search, ShieldCheck } from 'lucide-react';
+import { Check, CheckCircle2, Copy, Plus, Search, Share2, ShieldCheck } from 'lucide-react';
 import { StatusBadge } from '../components/StatusBadge';
 import { WorkflowStepper } from '../components/WorkflowStepper';
 import { usePortal } from '../context/PortalContext';
@@ -51,6 +51,8 @@ export const ConfirmationPage: React.FC = () => {
       ? `${window.location.origin}${trackingRelativeUrl}`
       : trackingRelativeUrl;
 
+  const [sharedOk, setSharedOk] = useState(false);
+
   const handleCopy = async (text: string, mode: 'link' | 'token') => {
     try {
       await navigator.clipboard.writeText(text);
@@ -64,6 +66,24 @@ export const ConfirmationPage: React.FC = () => {
     } catch {
       // Ignore clipboard failures
     }
+  };
+
+  const handleShareTracking = async () => {
+    if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
+      try {
+        await navigator.share({
+          title: `AC Scan2Print · ${confirmation.jobNumber}`,
+          text: `Track print job ${confirmation.jobNumber} at Aman Computer`,
+          url: fullTrackingUrl,
+        });
+        setSharedOk(true);
+        window.setTimeout(() => setSharedOk(false), 1800);
+        return;
+      } catch {
+        // User cancelled or share unsupported -> fallback to copy
+      }
+    }
+    await handleCopy(fullTrackingUrl, 'link');
   };
 
   return (
@@ -129,6 +149,14 @@ export const ConfirmationPage: React.FC = () => {
             >
               {copiedToken ? <Check size={14} /> : <Copy size={14} />}
               <span>{copiedToken ? 'Token copied' : 'Copy token'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => void handleShareTracking()}
+              className="portal-btn-secondary px-3.5 py-2 text-[12.5px] inline-flex items-center gap-1.5 cursor-pointer"
+            >
+              {sharedOk ? <Check size={14} /> : <Share2 size={14} />}
+              <span>{sharedOk ? 'Shared' : 'Share link'}</span>
             </button>
           </div>
         </div>

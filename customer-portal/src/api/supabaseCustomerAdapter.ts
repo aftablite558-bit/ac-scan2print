@@ -131,6 +131,9 @@ export class SupabaseCustomerPortalAdapter implements CustomerPortalApiAdapter {
       shopContactPhone: shopInfo.shopContactPhone,
       shopAddress: shopInfo.shopAddress,
       pricingRules: cfg?.pricingRules ?? [],
+      pilotStage: cfg?.pilotStatus?.pilotStage ?? 'dry_run',
+      intakePaused: Boolean(cfg?.pilotStatus?.intakePaused),
+      pauseReason: cfg?.pilotStatus?.pauseReason ?? null,
     };
   }
 

@@ -1,0 +1,25 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWindowsForms>true</UseWindowsForms>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>ACScan2Print.Agent.Tray</RootNamespace>
+    <AssemblyName>ACScan2Print.Agent.Tray</AssemblyName>
+    <Version>1.0.4</Version>
+    <AssemblyVersion>1.0.4.0</AssemblyVersion>
+    <FileVersion>1.0.4.0</FileVersion>
+    <Company>Aman Computer</Company>
+    <Product>AC Scan2Print System Tray Companion</Product>
+    <Description>System tray status monitor and pairing companion for AC Scan2Print.</Description>
+    <RuntimeIdentifiers>win-x64</RuntimeIdentifiers>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\ACScan2Print.Agent.Core\ACScan2Print.Agent.Core.csproj" />
+    <ProjectReference Include="..\ACScan2Print.Agent.Infrastructure\ACScan2Print.Agent.Infrastructure.csproj" />
+  </ItemGroup>
+</Project>

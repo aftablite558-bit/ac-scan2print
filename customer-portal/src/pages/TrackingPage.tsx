@@ -1,14 +1,21 @@
-import React, { useCallback, useEffect, useId, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Banknote,
+  Bell,
+  BellOff,
   Check,
+  CheckCircle2,
   Clock,
   FileText,
+  Pause,
+  Play,
   QrCode,
   RefreshCw,
   Search,
   ShieldAlert,
+  Volume2,
+  VolumeX,
 } from 'lucide-react';
 import { ErrorAlert, LoadingCard } from '../components/LoadingEmptyError';
 import { StatusBadge } from '../components/StatusBadge';
@@ -19,7 +26,48 @@ import {
   getCustomerSafeStatusMeta,
 } from '../lib/pricing';
 import { formatFileSize, validateUtrInput } from '../lib/validation';
-import type { CustomerJobStatusResponse, PaymentMethod } from '../types/portal';
+import type { CustomerJobStatusResponse, JobStatus, PaymentMethod } from '../types/portal';
+
+const ACTIVE_POLLABLE_STATUSES = new Set<JobStatus>([
+  'submitted',
+  'under_review',
+  'awaiting_payment',
+  'approved',
+  'queued',
+  'claimed',
+  'downloading',
+  'printing',
+  'submitted_to_spooler',
+]);
+
+function playCustomerPickupChime(isReady: boolean): void {
+  if (typeof window === 'undefined') return;
+  const AudioCtx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioCtx) return;
+  try {
+    const ctx = new AudioCtx();
+    const now = ctx.currentTime;
+    const notes = isReady ? [587.33, 783.99, 1046.5] : [523.25, 659.25];
+    notes.forEach((freq, idx) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, now + idx * 0.11);
+      gain.gain.setValueAtTime(0.001, now + idx * 0.11);
+      gain.gain.exponentialRampToValueAtTime(0.08, now + idx * 0.11 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + idx * 0.11 + 0.28);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + idx * 0.11);
+      osc.stop(now + idx * 0.11 + 0.3);
+    });
+    window.setTimeout(() => void ctx.close().catch(() => {}), 1000);
+  } catch {
+    // Ignore autoplay errors
+  }
+}
 
 export const TrackingPage: React.FC = () => {
   const { adapter, paymentSettings, searchParams, recentSessionJobs, navigate } = usePortal();
@@ -30,6 +78,14 @@ export const TrackingPage: React.FC = () => {
   const [jobData, setJobData] = useState<CustomerJobStatusResponse | null>(null);
   const [loading, setLoading] = useState(Boolean(initialUrlToken));
   const [error, setError] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [autoRefresh, setAutoRefresh] = useState(true);
+  const [soundEnabled, setSoundEnabled] = useState(false);
+  const [browserNotifyEnabled, setBrowserNotifyEnabled] = useState(false);
+  const [statusUpdateBanner, setStatusUpdateBanner] = useState<{
+    message: string;
+    tone: 'good' | 'info' | 'warn';
+  } | null>(null);
 
   const [retryPayMethod, setRetryPayMethod] = useState<PaymentMethod>('upi');
   const [retryUtr, setRetryUtr] = useState('');
@@ -39,31 +95,71 @@ export const TrackingPage: React.FC = () => {
 
   const tokenFieldId = useId();
   const retryUtrId = useId();
+  const prevJobStatusRef = useRef<{ jobNumber: string; status: JobStatus; paymentStatus: string } | null>(null);
 
   const fetchStatus = useCallback(
-    async (token: string) => {
+    async (token: string, silent = false) => {
       const clean = token.trim();
       if (!clean) {
         setError('Enter your private tracking token to check print status.');
         setJobData(null);
         return;
       }
-      setLoading(true);
+      if (!silent) setLoading(true);
       setError(null);
       try {
         const res = await adapter.getJobStatusByToken(clean);
+        const prev = prevJobStatusRef.current;
+        if (
+          prev &&
+          prev.jobNumber === res.jobNumber &&
+          (prev.status !== res.status || prev.paymentStatus !== res.paymentStatus)
+        ) {
+          const meta = getCustomerSafeStatusMeta(res.status, res.paymentStatus, res.paymentMethod);
+          const isReady = res.status === 'completed';
+          const isIssue = res.status === 'failed' || res.status === 'rejected' || res.status === 'cancelled';
+          const msg = isReady
+            ? `${res.jobNumber} is ready for pickup at Aman Computer counter!`
+            : `Status updated to ${meta.label}: ${meta.description}`;
+          setStatusUpdateBanner({
+            message: msg,
+            tone: isReady ? 'good' : isIssue ? 'warn' : 'info',
+          });
+          if (soundEnabled) {
+            playCustomerPickupChime(isReady);
+          }
+          if (
+            browserNotifyEnabled &&
+            typeof Notification !== 'undefined' &&
+            Notification.permission === 'granted'
+          ) {
+            try {
+              new Notification(`AC Scan2Print · ${res.jobNumber}`, { body: msg });
+            } catch {
+              // Ignore browser notification failure
+            }
+          }
+        }
+        prevJobStatusRef.current = {
+          jobNumber: res.jobNumber,
+          status: res.status,
+          paymentStatus: res.paymentStatus,
+        };
         setJobData(res);
         setActiveToken(clean);
+        setLastSyncedAt(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' }));
       } catch (err) {
-        setJobData(null);
-        setError(
-          err instanceof Error ? err.message : 'Unable to fetch status for this tracking token.'
-        );
+        if (!silent) {
+          setJobData(null);
+          setError(
+            err instanceof Error ? err.message : 'Unable to fetch status for this tracking token.'
+          );
+        }
       } finally {
-        setLoading(false);
+        if (!silent) setLoading(false);
       }
     },
-    [adapter]
+    [adapter, browserNotifyEnabled, soundEnabled]
   );
 
   useEffect(() => {
@@ -77,10 +173,45 @@ export const TrackingPage: React.FC = () => {
     }
   }, [initialUrlToken, fetchStatus]);
 
+  const isJobActiveForPolling = Boolean(jobData && ACTIVE_POLLABLE_STATUSES.has(jobData.status));
+
+  useEffect(() => {
+    if (!autoRefresh || !activeToken || !isJobActiveForPolling) return;
+    const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      void fetchStatus(activeToken, true);
+    }, 5000);
+    return () => window.clearInterval(timer);
+  }, [activeToken, autoRefresh, fetchStatus, isJobActiveForPolling]);
+
+  const handleToggleBrowserNotify = async () => {
+    if (browserNotifyEnabled) {
+      setBrowserNotifyEnabled(false);
+      return;
+    }
+    if (typeof Notification === 'undefined') {
+      setStatusUpdateBanner({
+        message: 'Browser notifications are not supported on this device; keep this tab open for live updates.',
+        tone: 'info',
+      });
+      return;
+    }
+    if (Notification.permission === 'granted') {
+      setBrowserNotifyEnabled(true);
+      return;
+    }
+    if (Notification.permission !== 'denied') {
+      const perm = await Notification.requestPermission();
+      setBrowserNotifyEnabled(perm === 'granted');
+    }
+  };
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     setRetryPaySuccess(null);
     setRetryPayError(null);
+    setStatusUpdateBanner(null);
+    prevJobStatusRef.current = null;
     void fetchStatus(tokenInput);
   };
 
@@ -244,15 +375,84 @@ export const TrackingPage: React.FC = () => {
               )}
             </div>
 
-            <button
-              type="button"
-              onClick={() => void fetchStatus(activeToken)}
-              className="portal-btn-secondary px-3.5 py-2 text-[13px] shrink-0 inline-flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <RefreshCw size={14} aria-hidden="true" />
-              <span>Refresh</span>
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              {isJobActiveForPolling && (
+                <button
+                  type="button"
+                  onClick={() => setAutoRefresh((v) => !v)}
+                  className="portal-btn-secondary px-3 py-2 text-[12.5px] inline-flex items-center gap-1.5 cursor-pointer"
+                  aria-pressed={autoRefresh}
+                >
+                  {autoRefresh ? (
+                    <>
+                      <span className="w-2 h-2 rounded-full bg-[#25C7D9] animate-pulse" aria-hidden="true" />
+                      <Pause size={13} aria-hidden="true" />
+                      <span>Live (5s)</span>
+                    </>
+                  ) : (
+                    <>
+                      <Play size={13} aria-hidden="true" />
+                      <span>Resume Live</span>
+                    </>
+                  )}
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  const next = !soundEnabled;
+                  setSoundEnabled(next);
+                  if (next) playCustomerPickupChime(false);
+                }}
+                className="portal-btn-secondary px-3 py-2 text-[12.5px] inline-flex items-center gap-1.5 cursor-pointer"
+                aria-pressed={soundEnabled}
+                title="Play chime when job finishes"
+              >
+                {soundEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                <span className="hidden sm:inline">{soundEnabled ? 'Chime On' : 'Chime Off'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void handleToggleBrowserNotify()}
+                className="portal-btn-secondary px-3 py-2 text-[12.5px] inline-flex items-center gap-1.5 cursor-pointer"
+                aria-pressed={browserNotifyEnabled}
+              >
+                {browserNotifyEnabled ? <Bell size={14} /> : <BellOff size={14} />}
+                <span className="hidden sm:inline">{browserNotifyEnabled ? 'Alerts On' : 'Notify Me'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => void fetchStatus(activeToken)}
+                className="portal-btn-secondary px-3.5 py-2 text-[13px] inline-flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <RefreshCw size={14} aria-hidden="true" />
+                <span>Refresh</span>
+              </button>
+            </div>
           </div>
+
+          {lastSyncedAt && (
+            <div className="text-[11.5px] text-[var(--color-text-muted)] tabular-nums">
+              Last synced at {lastSyncedAt}
+              {isJobActiveForPolling && autoRefresh ? ' · Auto-updating every 5s' : ''}
+            </div>
+          )}
+
+          {statusUpdateBanner && (
+            <div
+              role="status"
+              className={`rounded-[12px] p-3.5 text-[13px] flex items-start gap-2 border ${
+                statusUpdateBanner.tone === 'good'
+                  ? 'bg-[var(--good-soft)] border-[var(--good)]/30 text-[var(--good)]'
+                  : statusUpdateBanner.tone === 'warn'
+                    ? 'bg-[var(--warn-soft)] border-[var(--warn)]/30 text-[var(--warn)]'
+                    : 'bg-[var(--ac-cyan-soft)] border-[var(--ac-cyan-border)] text-[var(--color-text-primary)]'
+              }`}
+            >
+              <CheckCircle2 size={17} className="shrink-0 mt-0.5" />
+              <div className="font-semibold">{statusUpdateBanner.message}</div>
+            </div>
+          )}
 
           {jobData.rejectionReason && (
             <div className="rounded-[12px] bg-[var(--bad-soft)] border border-[var(--bad)]/30 p-3.5 text-[13px] text-[var(--bad)] flex items-start gap-2">

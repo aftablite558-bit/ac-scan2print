@@ -652,6 +652,12 @@ export const PrintJobDetailModal: React.FC<PrintJobDetailModalProps> = ({
                   <div className="flex items-center justify-between gap-2">
                     <div className="text-[13px] font-bold">Physical Sheets & Billing</div>
                     {job.payment_status !== 'paid' &&
+                      job.payment_status !== 'pending_verification' &&
+                      job.status !== 'queued' &&
+                      job.status !== 'claimed' &&
+                      job.status !== 'downloading' &&
+                      job.status !== 'printing' &&
+                      job.status !== 'submitted_to_spooler' &&
                       job.status !== 'completed' &&
                       job.status !== 'rejected' &&
                       job.status !== 'cancelled' &&

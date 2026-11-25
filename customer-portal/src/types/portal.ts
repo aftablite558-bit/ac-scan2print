@@ -49,6 +49,8 @@ export interface PricingRulePublic {
 
 export type TriStateCapability = 'yes' | 'no' | 'unknown';
 
+export type PilotStage = 'dry_run' | 'supervised_pilot' | 'live_pilot' | 'production';
+
 export interface PortalCapabilities {
   maxFilesPerJob: number;
   maxFileSizeBytes: number;
@@ -73,6 +75,9 @@ export interface PortalCapabilities {
   shopContactPhone: string;
   shopAddress: string;
   pricingRules: PricingRulePublic[];
+  pilotStage?: PilotStage;
+  intakePaused?: boolean;
+  pauseReason?: string | null;
 }
 
 export interface PublicPortalConfigPayload {
@@ -82,6 +87,11 @@ export interface PublicPortalConfigPayload {
     maxCopies: number;
     draftRetentionHours: number;
     completedRetentionHours: number;
+  };
+  pilotStatus?: {
+    pilotStage: PilotStage;
+    intakePaused: boolean;
+    pauseReason: string | null;
   };
   printerCapabilities: {
     configuredPrinterCount: number;

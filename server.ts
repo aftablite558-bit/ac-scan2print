@@ -608,6 +608,7 @@ function parseCookies(header: string | undefined): Record<string, string> {
 function setSessionCookie(res: Response, token: string): void {
   res.cookie(SESSION_COOKIE, token, {
     httpOnly: true,
+    secure: IS_PROD,
     sameSite: 'lax',
     path: '/',
     maxAge: 1000 * 60 * 60 * 24 * 7,
@@ -1645,6 +1646,36 @@ app.post('/api/enquiries/:id/notes', requireAuth, requirePerm('enquiries.write')
 // --- Door 5: Bihar Government Updates ---
 const rssParser = new Parser({ timeout: 12000 });
 
+function assertSafeExternalSourceUrl(rawUrl: string): string {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl.trim());
+  } catch {
+    throw new Error('Source URL must be a valid HTTP or HTTPS URL.');
+  }
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('Source URL must use http:// or https://.');
+  }
+  const host = parsed.hostname.toLowerCase();
+  if (
+    host === 'localhost' ||
+    host === '0.0.0.0' ||
+    host === '::1' ||
+    host === '[::1]' ||
+    host.endsWith('.local') ||
+    host.endsWith('.internal') ||
+    /^127\./.test(host) ||
+    /^10\./.test(host) ||
+    /^169\.254\./.test(host) ||
+    /^192\.168\./.test(host) ||
+    /^172\.(1[6-9]|2\d|3[0-1])\./.test(host) ||
+    /^f[cd][0-9a-f]{2}:/i.test(host)
+  ) {
+    throw new Error('Source URL cannot target private, loopback, or link-local addresses.');
+  }
+  return parsed.toString();
+}
+
 async function ingestSingleSource(source: {
   id: string;
   name: string;
@@ -1669,8 +1700,9 @@ async function ingestSingleSource(source: {
   const candidates: Array<{ title: string; description: string; link: string; pdfUrl: string | null }> = [];
 
   try {
+    const safeSourceUrl = assertSafeExternalSourceUrl(source.source_url);
     if (source.source_type === 'rss') {
-      const feed = await rssParser.parseURL(source.source_url);
+      const feed = await rssParser.parseURL(safeSourceUrl);
       for (const item of feed.items.slice(0, 20)) {
         const title = (item.title || '').trim();
         const link = (item.link || source.source_url).trim();
@@ -1833,6 +1865,13 @@ app.get('/api/govt/state', requireAuth, requirePerm('govt.read'), (_req, res) =>
 
 app.post('/api/govt/sources', requireAuth, requirePerm('govt.publish'), (req, res) => {
   const s = req.body as Record<string, unknown>;
+  let validatedUrl: string;
+  try {
+    validatedUrl = assertSafeExternalSourceUrl(String(s.source_url || ''));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid source_url' });
+    return;
+  }
   const id = crypto.randomUUID();
   db.prepare(
     `INSERT INTO govt_sources (
@@ -1843,7 +1882,7 @@ app.post('/api/govt/sources', requireAuth, requirePerm('govt.publish'), (req, re
     id,
     String(s.name || 'Bihar Portal'),
     String(s.department || 'Government of Bihar'),
-    String(s.source_url || ''),
+    validatedUrl,
     String(s.source_type || 'website'),
     String(s.default_category || 'Government Notifications'),
     s.is_trusted === 0 ? 0 : 1,
@@ -1865,6 +1904,13 @@ app.put('/api/govt/sources/:id', requireAuth, requirePerm('govt.publish'), (req,
     return;
   }
   const merged: Record<string, unknown> = { ...existing, ...(req.body as Record<string, unknown>) };
+  let validatedUrl: string;
+  try {
+    validatedUrl = assertSafeExternalSourceUrl(String(merged.source_url || ''));
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : 'Invalid source_url' });
+    return;
+  }
   db.prepare(
     `UPDATE govt_sources SET
       name = ?, department = ?, source_url = ?, source_type = ?, default_category = ?,
@@ -1873,7 +1919,7 @@ app.put('/api/govt/sources/:id', requireAuth, requirePerm('govt.publish'), (req,
   ).run(
     String(merged.name),
     String(merged.department),
-    String(merged.source_url),
+    validatedUrl,
     String(merged.source_type),
     String(merged.default_category),
     merged.is_trusted ? 1 : 0,

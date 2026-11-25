@@ -1,61 +1,100 @@
 # AC Scan2Print (AMAN COMPUTER) — Smart QR Print System
-## Phase 1: MVP Scope Definition & Delivery Boundaries
+## Phase 1: MVP Scope Definition & Feature Checklist
 
-**Document Version:** 1.0  
+**Document Version:** 2.0 (Reconciled with Phase 0 Baseline & Fixed Owner Decisions)  
 **Phase:** Phase 1 — Product Specification & UX Design (Documentation Only)  
-**Date:** 20 November 2026  
+**Date:** November 24, 2026  
+**Status:** Approved Specification
 
 ---
 
-## 1. MVP Philosophy (Roadmap §19 & §22)
-Prove **one complete, rock-solid, end-to-end secure workflow** from Customer QR Scan → Private Upload → Operator Review/Pricing/Payment → Windows 11 Local Print Agent → Actual Physical Shop Printer **before** adding multi-branch, automated payment gateways, or Office document conversion.
+## 1. MVP Architectural Boundary & Philosophy
+
+The AC Scan2Print MVP is designed to establish **one complete, hardened, end-to-end print pipeline** from Customer QR Scan to physical shop printing at Aman Computer.
+
+### Core Non-Negotiable Invariants:
+1. **Single Super Admin Account:** Only UID `Yr0Wr7PuuAdOIMaqohmqaINNbNC2` authorized via `print_admin_accounts`. No sub-operator accounts.
+2. **Optional Customer Identity:** Name and Phone optional. Anonymous tracking via cryptographic token hash.
+3. **Verified UPI Auto-Release:** Verified UPI payment qualifies for print queue without secondary manual approval.
+4. **Cash Payment Mandatory Approval:** Cash requires Admin confirmation and explicit job approval.
+5. **Physical Sheet Duplex Billing:** Billed per physical sheet (`ceil(pages / 2)`).
+6. **Dual-Branding Separation:** Admin remains Warm Orange (`#f07a2e`); Customer Portal uses Obsidian Dark (`#111318`) and Electric Cyan (`#25C7D9`).
+7. **Zero Speculation:** Unknown hardware capabilities or prices marked strictly as `"PENDING OWNER INPUT"`.
 
 ---
 
-## 2. Included in MVP (Phase 2–11 Target)
+## 2. Definitive MVP Feature Checklist
 
-### A. Backend & Security (Phase 2)
-- Versioned Supabase PostgreSQL migrations (`print_jobs`, `print_job_files`, `print_devices`, `print_printers`, `print_job_attempts`, `print_events`, `print_pricing_rules`, `print_payment_records`, `print_service_settings`, `print_notifications`).
-- Strict RLS policies on every table + Supabase Auth + RBAC enforcement.
-- Private Storage bucket (`print-uploads`) with short-lived signed upload & download URLs.
-- Core Edge Functions (`create-print-job`, `create-print-upload-url`, `finalize-print-upload`, `get-print-job-status`, `admin-review-print-job`, `admin-release-print-job`, `admin-retry-print-job`, `agent-enroll`, `agent-heartbeat`, `agent-sync-printers`, `agent-claim-job`, `agent-report-job-event`, `cleanup-expired-print-files`).
-- Single server-side price calculation function.
-- Scheduled storage file cleanup verified against real Storage objects.
-
-### B. Customer QR Portal (Phase 3)
-- Permanent public route `/quick-print` + mobile-first upload, options, idempotent confirmation, secure token tracking (`/quick-print/track`), and help.
-- Supported formats: **PDF, JPG/JPEG, PNG only** (server magic-byte + corruption validated).
-- Paper size: **A4 default** (`A3`/`Legal` shown only if enabled shop printer supports it).
-- Print mode: **B&W / Colour** (filtered by active printer capability).
-- Sides: **Single-sided** initially (**Double-sided** unlocked only after hardware duplex testing).
-- Copies (`1–20` configurable), basic page range, orientation, scaling, clear estimated price disclaimer, and retention privacy notice.
-
-### C. Admin Print Manager (Phase 4)
-- Authenticated access integrated into existing Admin `Shell.tsx`.
-- Operational Dashboard Overview (`/admin/print-management`).
-- Print Jobs list with search/filters + Job Detail with secure document preview, verified page count, price confirmation/override, Cash & manual UPI payment verification, Approve / Hold / Reject / Release / Cancel / Retry / Authorize Reprint / Handover.
-- Print Queue monitor + `needs_review` resolution workflow.
-- Printer & Agent Device management (enrollment approval, pause/resume, revocation, capability override, test print).
-- Pricing Rules management + test preview.
-- Permanent QR Management (verified URL, PNG/SVG export, printable poster).
-- Read-only Activity Logs, Notifications, Basic Reports, and Print/Retention Settings.
-
-### D. Windows 11 Local Print Agent (Phase 5–8)
-- C# / .NET 8 background worker + System Tray UI on **1 Windows 11 PC** supporting **1+ USB/Wi-Fi/LAN printers**.
-- Device enrollment + Windows DPAPI credential storage.
-- Atomic job claim with lease, SHA-256 verification, silent PDF + JPG/PNG printing via licensed/vetted PDF renderer, spooler ID capture, offline/error handling, `needs_review` protection, reconnect, temp file purge, and Windows installer.
+| # | System Area | Feature / Capability | MVP Scope Status | Notes & Invariants |
+| :-: | :--- | :--- | :---: | :--- |
+| **A** | **Authentication & Security** | | | |
+| A1 | Backend Auth | Firebase Auth with RS256 token verification via Google JWKS | **INCLUDED (MVP)** | Edge Functions verify via `jose` library |
+| A2 | Admin Access | Single Super Admin singleton guard (`Yr0Wr7...`) | **INCLUDED (MVP)** | Enforced via `print_admin_accounts` table |
+| A3 | Multi-Role Staff | Sub-accounts (Staff, Operator, Viewer, Manager) | **DEFERRED (Phase 12)** | Explicit owner decision |
+| A4 | Customer Identity | Anonymous submission via 256-bit `tracking_token` | **INCLUDED (MVP)** | Only `SHA-256(tracking_token)` stored in DB |
+| A5 | Customer Accounts | Customer sign-up, login, or password protection | **DEFERRED (Phase 12)** | Zero customer accounts in MVP |
+| **B** | **Storage & File Security** | | | |
+| B1 | Storage Buckets | 3 Private buckets (`print-uploads`, `payment-evidence`, `payment-assets`) | **INCLUDED (MVP)** | Zero public bucket access |
+| B2 | Upload Security | 120-second signed upload URLs | **INCLUDED (MVP)** | Direct-to-storage private upload |
+| B3 | Admin Preview | 120-second signed preview URLs for documents & proofs | **INCLUDED (MVP)** | Generated only for verified Admin |
+| B4 | File Retention | Automated 24h permanent deletion of files & proofs | **INCLUDED (MVP)** | Scheduled cleanup cron function |
+| **C** | **Customer Portal (`/quick-print*`)** | | | |
+| C1 | Route Design | Dedicated mobile-first routes (`/quick-print` through `/track`) | **INCLUDED (MVP)** | Obsidian dark (`#111318`) & Cyan (`#25C7D9`) |
+| C2 | File Upload | Multi-file upload for PDF, JPG, PNG (<= 20 MB, max 5 files) | **INCLUDED (MVP)** | Magic-byte & corruption validated |
+| C3 | Office Documents | Word (.docx), Excel (.xlsx), PowerPoint (.pptx) | **DEFERRED (Phase 12)** | Requires sandboxed conversion cluster |
+| C4 | Print Options | B&W/Colour, A4, Duplex, Copies (1-20), Page Range | **INCLUDED (MVP)** | Hardware-dependent options gated |
+| C5 | Duplex Pricing | Duplex calculation per physical sheet (`ceil(pages/2)`) | **INCLUDED (MVP)** | Formula disclosed upfront to customer |
+| C6 | Price Estimate | Server-calculated estimated total with counter notice | **INCLUDED (MVP)** | Exact same pricing engine as Admin |
+| C7 | UPI Payment | Shop UPI QR display, VPA copy, 12-digit UTR input, proof upload | **INCLUDED (MVP)** | Proofs to `payment-evidence` bucket |
+| C8 | Cash Payment | "Pay Cash at Counter" toggle | **INCLUDED (MVP)** | Sets `payment_status = 'unpaid'` |
+| C9 | Confirmation | Monospace `job_number` & copyable tracking link | **INCLUDED (MVP)** | Idempotent on browser refresh |
+| C10| Live Tracking | Real-time status badge & vertical progress timeline | **INCLUDED (MVP)** | Public tracking never exposes private URLs |
+| C11| WhatsApp/SMS | Automated SMS / WhatsApp status notifications | **DEFERRED (Phase 9)** | Requires WhatsApp BSP approval |
+| **D** | **Admin Dashboard (`/admin/*`)** | | | |
+| D1 | UI Frame | Warm Orange (`#f07a2e`) glassmorphic shell (`Shell.tsx`) | **INCLUDED (MVP)** | Preserves existing brand identity |
+| D2 | Dashboard Overview | Clickable KPI tiles for all 16 states & today's revenue | **INCLUDED (MVP)** | Real-time operational metrics |
+| D3 | Print Jobs Ledger | Searchable, filterable table of all customer jobs | **INCLUDED (MVP)** | Debounced search & server pagination |
+| D4 | Document Preview | Integrated PDF & image viewer via 120s signed URLs | **INCLUDED (MVP)** | Verified page count check |
+| D5 | Pricing Calculation | Server-calculated total + manual price override | **INCLUDED (MVP)** | Override requires mandatory text reason |
+| D6 | UPI Verification | UTR match + screenshot preview with Auto-Release | **INCLUDED (MVP)** | Auto-release to queue upon verification |
+| D7 | Cash Confirmation | "Confirm Cash Received" button + manual approve | **INCLUDED (MVP)** | Explicit Admin approval required |
+| D8 | Job Rejection | Reject job with mandatory recorded reason modal | **INCLUDED (MVP)** | Emits audit event & updates tracking |
+| D9 | Live Print Queue | Real-time monitor of active agent leases & spooler jobs | **INCLUDED (MVP)** | Displays lease countdown timers |
+| D10| Ambiguity Guard | Flag post-spooler crash as `needs_review` | **INCLUDED (MVP)** | **Strictly blocks auto-reprint** |
+| D11| Authorize Reprint | Manual reprint button requiring mandatory reason | **INCLUDED (MVP)** | Increments attempt number |
+| D12| Printer Fleet | Manage USB/Wi-Fi printers & capability overrides | **INCLUDED (MVP)** | Gated by tri-state nullability |
+| D13| Agent Management | Device enrollment approval, heartbeat tracking, revoke | **INCLUDED (MVP)** | Real-time agent status indicator |
+| D14| QR & Posters | Permanent URL check, SVG/PNG QR export, A4 poster | **INCLUDED (MVP)** | Permanent counter QR assets |
+| D15| Immutable Audit | Read-only activity logs (`print_events`) | **INCLUDED (MVP)** | Zero edit/delete functionality |
+| **E** | **Windows 11 Local Print Agent** | | | |
+| E1 | Platform & Worker | C# / .NET 8 background service on Windows 11 shop PC | **INCLUDED (MVP)** | Zero Supabase `service_role` keys |
+| E2 | Local Security | DPAPI-encrypted device token storage | **INCLUDED (MVP)** | Encrypted in `%LocalAppData%` |
+| E3 | Printer Discovery | Auto-enumeration of USB, Wi-Fi, and LAN printers | **INCLUDED (MVP)** | Syncs to `print_printers` via API |
+| E4 | Job Claim & Lease | Atomic job claim with 120-second lease | **INCLUDED (MVP)** | Issues 120s download URLs |
+| E5 | Spooler Submission | Silent PDF rendering + Windows Print Spooler submission | **INCLUDED (MVP)** | Captures `windows_spooler_job_id` |
+| E6 | Error & Recovery | Pre-spooler failure vs post-spooler `needs_review` | **INCLUDED (MVP)** | Temp files deleted immediately |
+| E7 | System Tray UI | Windows Tray icon with status, pause, test print | **INCLUDED (MVP)** | Visual status indicator on shop PC |
 
 ---
 
-## 3. Explicitly Excluded from MVP (Deferred to Post-MVP / Phase 9–12)
+## 3. Open Parameters Register ("PENDING OWNER INPUT")
 
-| Deferred Feature | Target Phase | Rationale for Deferral |
-| :--- | :---: | :--- |
-| Optional `/admin/customers` directory & customer login accounts | Phase 12 | Customer accounts add friction; anonymous `tracking_token` is faster and safer for shop walk-ins |
-| Office Document Support (`DOC/DOCX`, `XLS/XLSX`, `PPT/PPTX`) | Phase 12 | Requires sandboxed conversion, macro isolation, and font/layout QA |
-| Automated Online Payment Gateway & UPI Webhooks (Razorpay/PhonePe/etc.) | Phase 12 | Shop counter handles Cash & manual UPI verification reliably in MVP |
-| Automated Customer WhatsApp / SMS Alerts | Phase 9 | Requires third-party BSP approval, templates, and customer phone consent |
-| Multi-branch / Multi-shop routing & Self-service Kiosk mode | Phase 12 | Single-shop physical reliability must be proven first |
-| Hindi / English UI language switcher | Phase 12 | Core English operational UI + clear copy prioritized first |
-| Advanced consumables / ink-toner predictive analytics | Phase 12 | Requires vendor-specific SNMP telemetry across printer fleet |
-| Automated "Direct-Print without Operator Review" mode | Post-Pilot (if ever) | High risk of wasted paper/unpaid jobs until pilot proves stability |
+The following items are strictly marked as unresolved until the shop owner provides verified values:
+
+1. **Exact Print Rates (INR):**
+   - Rate per page for A4 Black & White (Single-sided).
+   - Rate per physical sheet for A4 Black & White (Duplex).
+   - Rate per page for A4 Colour (Single-sided).
+   - Rate per physical sheet for A4 Colour (Duplex).
+   - Minimum job charge (if applicable).
+   - *Status:* **PENDING OWNER INPUT** (Zero hardcoded INR rates in code; table seeded empty).
+2. **Printer Fleet Hardware Inventory:**
+   - Exact brand and model of primary counter printer (e.g., HP LaserJet, Canon LBP).
+   - Connection type (USB cable vs Wi-Fi static IP).
+   - Hardware automatic duplex support (Yes / No).
+   - Colour support (Monochrome only vs Colour).
+   - Physically loaded paper trays (A4, Legal, A3).
+   - *Status:* **PENDING OWNER INPUT** (Columns set to tri-state `NULL` / Unknown).
+3. **Production Domain URL:**
+   - Exact custom domain (e.g., `print.amancomputer.in` or `amancomputer.in/quick-print`).
+   - *Status:* **PENDING OWNER INPUT** (Defaults to `https://ac-scan2print.web.app/quick-print`).

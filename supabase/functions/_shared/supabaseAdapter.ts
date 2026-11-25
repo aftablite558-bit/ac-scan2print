@@ -45,6 +45,45 @@ export function readDenoRuntimeEnv(): RuntimeEnv {
   };
 }
 
+function normalizeSystemSettingsRow(row: Record<string, unknown>): PrintSystemSettings {
+  const rawChecklist = row.pilot_checklist;
+  const chkObj =
+    rawChecklist && typeof rawChecklist === 'object' && !Array.isArray(rawChecklist)
+      ? (rawChecklist as Record<string, unknown>)
+      : {};
+  const stage = row.pilot_stage;
+  return {
+    id: Number(row.id ?? 1),
+    customer_portal_url: typeof row.customer_portal_url === 'string' ? row.customer_portal_url : null,
+    max_file_size_bytes: Number(row.max_file_size_bytes ?? 20 * 1024 * 1024),
+    max_files_per_job: Number(row.max_files_per_job ?? 5),
+    max_copies: Number(row.max_copies ?? 20),
+    draft_retention_hours: Number(row.draft_retention_hours ?? 1),
+    completed_retention_hours: Number(row.completed_retention_hours ?? 24),
+    failed_retention_hours: Number(row.failed_retention_hours ?? 72),
+    retention_policy_confirmed: Boolean(row.retention_policy_confirmed),
+    auto_cleanup_enabled: Boolean(row.auto_cleanup_enabled),
+    pilot_stage:
+      stage === 'supervised_pilot' || stage === 'live_pilot' || stage === 'production'
+        ? stage
+        : 'dry_run',
+    pilot_intake_paused: Boolean(row.pilot_intake_paused),
+    pilot_pause_reason: typeof row.pilot_pause_reason === 'string' ? row.pilot_pause_reason : null,
+    pilot_target_jobs: Number(row.pilot_target_jobs ?? 100),
+    pilot_go_live_approved_at:
+      typeof row.pilot_go_live_approved_at === 'string' ? row.pilot_go_live_approved_at : null,
+    pilot_checklist: {
+      shopPcInstalled: chkObj.shopPcInstalled === true,
+      printerTested: chkObj.printerTested === true,
+      qrPosterDisplayed: chkObj.qrPosterDisplayed === true,
+      staffTrained: chkObj.staffTrained === true,
+      backupTested: chkObj.backupTested === true,
+    },
+    updated_at: typeof row.updated_at === 'string' ? row.updated_at : new Date().toISOString(),
+    updated_by: typeof row.updated_by === 'string' ? row.updated_by : null,
+  };
+}
+
 export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
   const supabaseUrl = Deno.env.get('SUPABASE_URL');
   const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
@@ -121,7 +160,18 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
     async getSystemSettings() {
       const { data, error } = await adminClient.from('print_system_settings').select('*').eq('id', 1).single();
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
-      return data as PrintSystemSettings;
+      return normalizeSystemSettingsRow(data as Record<string, unknown>);
+    },
+
+    async updateSystemSettings(patch) {
+      const { data, error } = await adminClient
+        .from('print_system_settings')
+        .update({ ...patch, updated_at: new Date().toISOString() })
+        .eq('id', 1)
+        .select('*')
+        .single();
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return normalizeSystemSettingsRow(data as Record<string, unknown>);
     },
 
     async getPaymentSettings() {
@@ -132,13 +182,7 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
 
     async getPublicPortalBootstrapData(): Promise<PublicPortalBootstrapData> {
       const [sysRes, printersRes, rulesRes] = await Promise.all([
-        adminClient
-          .from('print_system_settings')
-          .select(
-            'max_file_size_bytes, max_files_per_job, max_copies, draft_retention_hours, completed_retention_hours'
-          )
-          .eq('id', 1)
-          .single(),
+        adminClient.from('print_system_settings').select('*').eq('id', 1).single(),
         adminClient
           .from('print_printers')
           .select(
@@ -156,8 +200,18 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       if (sysRes.error) throw new AppError(500, 'DB_ERROR', sysRes.error.message);
       if (printersRes.error) throw new AppError(500, 'DB_ERROR', printersRes.error.message);
       if (rulesRes.error) throw new AppError(500, 'DB_ERROR', rulesRes.error.message);
+      const sys = normalizeSystemSettingsRow(sysRes.data as Record<string, unknown>);
       return {
-        systemSettings: sysRes.data as PublicPortalBootstrapData['systemSettings'],
+        systemSettings: {
+          max_file_size_bytes: sys.max_file_size_bytes,
+          max_files_per_job: sys.max_files_per_job,
+          max_copies: sys.max_copies,
+          draft_retention_hours: sys.draft_retention_hours,
+          completed_retention_hours: sys.completed_retention_hours,
+          pilot_stage: sys.pilot_stage,
+          pilot_intake_paused: sys.pilot_intake_paused,
+          pilot_pause_reason: sys.pilot_pause_reason,
+        },
         printers: (printersRes.data ?? []) as PublicPortalBootstrapData['printers'],
         pricingRules: ((rulesRes.data ?? []) as PrintPricingRule[]).map((r) => ({
           ...r,
@@ -680,6 +734,16 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
       return (data ?? []) as PrintJobAttempt[];
     },
 
+    async listAllAttempts(limit = 500) {
+      const { data, error } = await adminClient
+        .from('print_job_attempts')
+        .select('*')
+        .order('started_at', { ascending: false })
+        .limit(limit);
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintJobAttempt[];
+    },
+
     async getAttemptById(attemptId: string) {
       const { data, error } = await adminClient
         .from('print_job_attempts')
@@ -781,6 +845,16 @@ export function createLiveSupabaseAdapter(): Scan2PrintBackendAdapter {
         .single();
       if (error) throw new AppError(500, 'DB_ERROR', error.message);
       return data as PrintCleanupLog;
+    },
+
+    async listCleanupLogs(limit = 15) {
+      const { data, error } = await adminClient
+        .from('print_cleanup_logs')
+        .select('*')
+        .order('executed_at', { ascending: false })
+        .limit(limit);
+      if (error) throw new AppError(500, 'DB_ERROR', error.message);
+      return (data ?? []) as PrintCleanupLog[];
     },
 
     async createSignedUploadUrl(bucket: string, path: string, expiresInSeconds: number) {

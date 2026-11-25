@@ -1,133 +1,139 @@
 # AC Scan2Print (AMAN COMPUTER) — Smart QR Print System
 ## Phase 1: Job, Attempt & Device State Machines
 
-**Document Version:** 1.0  
+**Document Version:** 2.0 (Reconciled with Phase 0 Baseline & Fixed Owner Decisions)  
 **Phase:** Phase 1 — Product Specification & UX Design (Documentation Only)  
-**Date:** 20 November 2026  
-**Authority:** Technical Roadmap v1.1 Section 9 (authoritative for state definitions)
+**Date:** November 24, 2026  
+**Status:** Approved Specification  
+**Authority:** Technical Roadmap v1.1 Section 9 & Production Database Schema
 
 ---
 
-## 1. Reconciliation of Job States (Roadmap §9 vs Prompt Labels)
+## 1. Complete Canonical Job States (16 States)
 
-Roadmap §9 is authoritative for database state values. The table below maps user-facing labels to canonical backend `print_jobs.status` and `payment_status` values so there is zero discrepancy:
+The database table `public.print_jobs` utilizes the `job_status` enum. All 16 canonical states are strictly defined below, alongside their customer-facing tracking label, operational meaning, and authoritative actor:
 
-| Canonical `print_jobs.status` | Prompt / UI Equivalent Term | Owner / Meaning |
+| Canonical `status` | Customer-Facing Tracking Label | Operational Meaning | Authoritative Actor |
+| :--- | :--- | :--- | :--- |
+| `draft` | Upload in Progress | Customer initialized upload session; files uploading to private storage. | Customer / Client |
+| `submitted` | Request Submitted | Upload finalized; job registered in system; awaiting counter intake. | Customer (`finalize-print-upload`) |
+| `under_review` | Under Review | Super Admin opened job; inspecting document preview and settings. | Super Admin |
+| `awaiting_payment` | Awaiting Payment | Price confirmed; waiting for customer UPI UTR verification or cash at counter. | Super Admin |
+| `approved` | Approved | Settings & price confirmed; approved for print release. | Super Admin |
+| `queued` | Queued for Print | Released to active printer queue; eligible for Local Print Agent claim. | System (UPI) / Super Admin (Cash) |
+| `claimed` | Preparing Print | Print Agent acquired exclusive 120-second lease (`lease_expires_at`). | Windows Print Agent |
+| `downloading` | Downloading Files | Print Agent downloading private files via short-lived signed URLs. | Windows Print Agent |
+| `printing` | Rendering & Spooling | Agent rendering PDF/images and submitting to Windows Print Spooler. | Windows Print Agent |
+| `submitted_to_spooler` | Submitted to Printer | Windows Spooler accepted job (`windows_spooler_job_id` recorded). | Windows Print Agent |
+| `completed` | Ready for Collection | Physical output printed cleanly and confirmed at counter. | Agent / Super Admin |
+| `failed` | Print Failed | Confirmed pre-spooler failure (corrupt file, driver error, printer offline). | Agent / System |
+| `needs_review` | Checking Print Output | Ambiguous post-spooler outcome (crash, timeout, paper jam). Auto-reprint blocked! | System Sweeper |
+| `rejected` | Request Rejected | Super Admin declined job with mandatory recorded reason. | Super Admin |
+| `cancelled` | Cancelled | Job cancelled prior to printing. | Customer / Super Admin |
+| `expired` | Session Expired | Stale unsubmitted draft or uncollected job exceeded retention lifetime. | System Cleanup Cron |
+
+---
+
+## 2. Orthogonal Payment State Machine (`payment_status`)
+
+Payment state is tracked independently from job processing state to maintain absolute financial accounting accuracy:
+
+| `payment_status` | Operational Definition | Allowed Transition Trigger |
 | :--- | :--- | :--- |
-| `draft` | Upload in progress | Customer started upload session; files not yet finalized |
-| `submitted` | Pending review / New request | Customer finalized upload; waiting for operator to open |
-| `under_review` | Pending review | Operator actively reviewing documents, page count, and print options |
-| `awaiting_payment` | Awaiting payment / Payment verification | Final price confirmed; waiting for Cash or manual UPI verification |
-| `approved` | Approved | Operator approved job & confirmed price/payment; ready for queue release |
-| `queued` | Queued | Released to target printer queue; eligible for active Print Agent claim |
-| `claimed` | Claimed | One Print Agent holds an active time-limited lease (`lease_expires_at`) |
-| `downloading` | Claimed / Preparing | Print Agent downloading encrypted files via short-lived URLs & checking SHA-256 |
-| `printing` | Printing | Agent rendering/submitting job to Windows Print Spooler |
-| `submitted_to_spooler` | Submitted to spooler | Windows spooler accepted job (`windows_spooler_job_id` captured); physical output not yet guaranteed |
-| `completed` | Completed | Physical print confirmed / handed over by operator |
-| `failed` | Failed | Confirmed pre-spooler or explicit driver failure; safe to retry after diagnosis |
-| `needs_review` | Needs review | Outcome uncertain (e.g., crash/timeout/disconnect after spooler handoff); **auto-retry forbidden** |
-| `rejected` | Rejected | Operator declined job with recorded reason (e.g., unreadable/unsupported content) |
-| `cancelled` | Cancelled | Cancelled before irreversible spooler submission |
-| `expired` | Expired | Draft or stale uncollected job exceeded configured lifetime |
-
-### Separate `payment_status` Enum (Orthogonal to `print_jobs.status`)
-- `unpaid` — No payment recorded yet.
-- `pending_verification` — Optional counter state while UPI receipt is being checked on shop device (never marks `paid` automatically).
-- `paid` — Cash received or UPI manually verified by authorized staff (`confirmed_by`, `confirmed_at`).
-- `refunded` — Authorized refund/reversal recorded (only if shop refund workflow is enabled).
+| `unpaid` | No payment received yet (default for cash or initial upload). | Initial creation or cash option selected. |
+| `pending_verification` | Customer submitted 12-digit UTR or screenshot proof via UPI. | Customer submitted UPI details in Customer Portal. |
+| `paid` | Payment verified in shop bank account or cash received in hand. | Super Admin clicks "Verify UPI" or "Confirm Cash". |
+| `refunded` | Payment returned/reversed (only if authorized by Super Admin). | Super Admin records refund in payment ledger. |
 
 ---
 
-## 2. Allowed Job State Transitions (Server-Enforced Only)
-
-Frontend UI must **never** mutate `print_jobs.status` directly. Every transition executes inside a validated Edge Function / database transaction and appends an immutable `print_events` row.
+## 3. Formal Job State Transition Matrix
 
 ```text
-[draft] ──(finalize-print-upload)──────────────────► [submitted]
+[draft] ──(finalize upload)────────────────────────► [submitted]
    │                                                      │
-   └──(TTL 1h cleanup)──► [expired]                       ▼
-                                                    [under_review] ◄────┐
-                                                     │    │    │        │
-                   (reject)──────────────────────────┘    │    └─(hold)─┘
-                      ▼                                   │
-                  [rejected]                              ▼
-                                                   [awaiting_payment]
-                                                          │
-                                       (confirm payment)  │
-                                                          ▼
-                                                     [approved]
-                                                          │
-                                        (release to queue)│
-                                                          ▼
-                                                      [queued] ◄───(admin-retry-print-job from failed)
-                                                          │
-                                        (agent-claim-job) │
-                                                          ▼
-                                                      [claimed] ──(lease expired pre-spooler)──► [queued] or [failed]*
-                                                          │
-                                                          ▼
-                                                    [downloading] ──(checksum/URL error)──► [failed]
-                                                          │
-                                                          ▼
-                                                     [printing] ──(pre-spooler error)────► [failed]
-                                                          │
-                                         (spooler Job ID) ▼
-                                               [submitted_to_spooler] ──(lease timeout / crash / unknown)──► [needs_review]
-                                                          │                                                        │
-                                     (confirmed done /    │                  (operator verifies physical output)   │
-                                      operator handover)  ▼                         ┌──────────────────────────────┤
-                                                     [completed] ◄──────────────────┘                              │
-                                                                                                                   ▼
-                                                                             (authorize reprint w/ reason) ──► [queued]
-
-*Cancellation:* [draft | submitted | under_review | awaiting_payment | approved | queued] ──(admin/authorized cancel)──► [cancelled]
-*Expiration:*   [draft | submitted | awaiting_payment] ──(retention sweep)──► [expired]
+   └──(TTL 1h)──► [expired]                               ▼
+                                                    [under_review]
+                                                     │    │    │
+                    (reject w/ reason)───────────────┘    │    └─(cancel)─► [cancelled]
+                       ▼                                  │
+                   [rejected]                             ▼
+                                                    [awaiting_payment]
+                                                      │           │
+                                       (Cash confirm) │           │ (UPI verified:
+                                                      ▼           │  auto-release)
+                                                  [approved]      │
+                                                      │           │
+                                       (Admin release)│           │
+                                                      ▼           ▼
+                                                  [queued] ◄──────┘ ◄───(retry from failed)
+                                                      │
+                                                      ▼
+                                                  [claimed] ──(lease timeout pre-spooler)──► [queued] / [failed]
+                                                      │
+                                                      ▼
+                                                [downloading] ──(checksum error)──────────► [failed]
+                                                      │
+                                                      ▼
+                                                 [printing] ──(driver / offline error)────► [failed]
+                                                      │
+                                                      ▼
+                                            [submitted_to_spooler] ──(crash / timeout)────► [needs_review]
+                                                      │                                           │
+                                                      │                               (paper jam/ │ (tray OK)
+                                       (spooler done) │                               reprint)    ▼
+                                                      ▼                                ┌───► [completed]
+                                                 [completed]                           │
+                                                      │                                │
+                                                      └───(reprint w/ reason)──────────┴───► [queued]
 ```
-*\*Note on `claimed` lease expiry:* Only if `print_job_attempts.submitted_to_spooler_at IS NULL` can lease recovery return a job to `queued` (or `failed` after max attempt threshold); if `submitted_to_spooler_at IS NOT NULL`, lease expiry **must** move the job to **`needs_review`**.
 
-### Complete Transition Guard Matrix
+### Complete Transition Guard Table
 
-| From | To | Permitted Actor | Mandatory Guards & Side Effects |
-| :--- | :--- | :--- | :--- |
-| `(new)` | `draft` | Customer | Valid file metadata within limits; generates `job_number` & idempotency key. |
-| `draft` | `submitted` | Customer (`finalize-print-upload`) | >= 1 valid uploaded object verified in Storage; magic bytes + page count OK; generates `tracking_token_hash`; emits `admin_notification`. |
-| `draft` | `expired` | System Cleanup | `now() > expires_at` (e.g., >1h unsubmitted); deletes Storage objects. |
-| `submitted` | `under_review` | Operator / Admin | Operator opens review or starts verification; locks/assigns reviewer. |
-| `under_review` | `awaiting_payment` | Operator / Admin | Verified page count & settings saved; `final_amount` computed/confirmed (reason logged if overridden). |
-| `under_review` / `awaiting_payment` | `approved` | Operator / Admin | `final_amount` confirmed AND (`payment_status = 'paid'` OR explicit authorized pay-on-pickup rule if owner enables). |
-| `under_review` / `awaiting_payment` | `rejected` | Operator / Admin | Non-empty `rejection_reason` mandatory; schedules file retention deletion. |
-| `approved` | `queued` | Operator / Admin | `assigned_printer_id` is set and enabled; `payment_status = 'paid'` (unless owner overrides default rule). |
-| `queued` | `claimed` | Active Print Agent | Atomic conditional update (`WHERE status='queued' AND claimed_by_device_id IS NULL`); Agent device is `active` & owns `assigned_printer_id`; sets `lease_expires_at` + creates `print_job_attempts` row. |
-| `claimed` | `downloading` | Claiming Agent | Matching `device_id` + valid active lease + matching `attempt_id`. |
-| `downloading` | `printing` | Claiming Agent | SHA-256 verified; printer online & ready locally. |
-| `printing` | `submitted_to_spooler` | Claiming Agent | Spooler accepted job; stores `windows_spooler_job_id` + `submitted_to_spooler_at`. |
-| `submitted_to_spooler` | `completed` | Agent / Operator | Driver/spooler completion confirmed OR operator confirms physical handover at counter; schedules 24h file deletion. |
-| `claimed` / `downloading` / `printing` | `failed` | Claiming Agent / System | Only when `submitted_to_spooler_at IS NULL`; stores `error_code` + `error_message_safe`. |
-| `submitted_to_spooler` / `printing` | `needs_review` | System / Agent | Triggered if lease expires after spooler handoff, agent disconnects mid-print, or spooler state is ambiguous. **Blocks auto-retry.** |
-| `failed` | `queued` | Operator / Admin (`admin-retry-print-job`) | Printer online; creates new `print_job_attempts` (`attempt_number + 1`) + audit event. |
-| `needs_review` | `completed` | Operator / Admin | Operator physically verified pages came out cleanly at counter; audit reason recorded. |
-| `needs_review` / `completed` | `queued` | Operator / Admin (Reprint) | **Explicit Authorize Reprint action** with mandatory `reprint_reason`; creates new `print_job_attempts` row + audit log. |
-| `draft`..`queued` | `cancelled` | Operator / Admin | Only before `claimed` (or if claim cleanly aborted pre-spooler); reason logged. |
+| Current State | Target State | Permitted Actor | Mandatory Guards & Preconditions | Side Effects & Audit Events |
+| :--- | :--- | :--- | :--- | :--- |
+| `(none)` | `draft` | Customer | File metadata valid; generates temporary `job_id` and signed upload URL. | Storage folder created in `print-uploads`. |
+| `draft` | `submitted` | Customer | `>= 1` uploaded file exists; magic bytes valid; page count verified; `idempotency_key` checked. | Sets `job_number`, generates `tracking_token`, stores `tracking_token_hash`, emits `job_submitted` event. |
+| `draft` | `expired` | System Cron | `now() > created_at + interval '1 hour'`. | Deletes unfinalized draft files from storage. |
+| `submitted` | `under_review` | Super Admin | Super Admin opens Job Details in Admin Dashboard. | Assigns reviewer, emits `review_started` event. |
+| `under_review` | `awaiting_payment`| Super Admin | Verified page count and settings confirmed; price calculated. | Emits `price_confirmed` event. |
+| `awaiting_payment`| `approved` | Super Admin | **Cash Workflow:** Admin clicked "Confirm Cash Received" (`payment_status = 'paid'`). | Records cash receipt, emits `cash_confirmed` & `job_approved` events. |
+| `approved` | `queued` | Super Admin | Target printer is enabled & online; Admin clicks "Release to Queue". | Sets `assigned_printer_id`, emits `job_queued` event. |
+| `awaiting_payment` / `under_review` | `queued` | **System Rule** | **UPI Workflow:** Admin verified UPI UTR / proof (`payment_status = 'paid'`). Auto-qualifies for queue without secondary approval. | Sets `status = 'queued'`, sets `assigned_printer_id`, emits `upi_verified` & `job_queued` events. |
+| `under_review` / `awaiting_payment` | `rejected` | Super Admin | Mandatory `rejection_reason` provided (>= 5 chars). | Sets `rejection_reason`, schedules 24h file cleanup, emits `job_rejected` event. |
+| `draft` .. `queued` | `cancelled` | Customer / Admin | Allowed only before Print Agent claims the job. Mandatory reason if Admin cancels. | Sets `cancellation_reason`, schedules 24h cleanup, emits `job_cancelled` event. |
+| `queued` | `claimed` | Windows Agent | Atomic SQL query: `status = 'queued' AND claimed_by_device_id IS NULL`. Target printer belongs to claiming active device. | Sets `claimed_by_device_id`, sets `lease_expires_at = now() + 120s`, creates `print_job_attempts` row, issues 120s download URLs. |
+| `claimed` | `downloading` | Claiming Agent | Agent holds active lease; starts HTTP stream download. | Updates attempt status to `downloading`. |
+| `downloading` | `printing` | Claiming Agent | File SHA-256 verified; printer online; starts rendering. | Updates attempt status to `printing`. |
+| `printing` | `submitted_to_spooler`| Claiming Agent | Windows Print Spooler accepted job. | Records `windows_spooler_job_id` and `submitted_to_spooler_at`. |
+| `submitted_to_spooler`| `completed` | Agent / Admin | Spooler finished successfully or Admin verified physical paper at counter. | Sets `completed_at`, starts 24h file retention timer, emits `job_completed` event. |
+| `claimed` / `downloading` / `printing` | `failed` | Agent / System | Error occurred **before spooler submission** (`submitted_to_spooler_at IS NULL`). | Stores `error_code` and `error_message_safe`, releases claim lease. |
+| `submitted_to_spooler`| `needs_review` | System Sweeper | Lease expired or agent disconnected **after spooler submission** (`submitted_to_spooler_at IS NOT NULL`). | **Blocks auto-reprint.** Alerts Admin to check physical printer paper tray. |
+| `needs_review` | `completed` | Super Admin | Admin physically confirmed document printed successfully at counter. | Records admin confirmation, sets `completed_at`. |
+| `needs_review` / `failed` | `queued` | Super Admin | Admin clicks "Retry" or "Authorize Reprint" with mandatory `reprint_reason`. | Creates new attempt (`attempt_number + 1`), sets `status = 'queued'`, emits `reprint_authorized` event. |
 
 ---
 
-## 3. Print Device & Attempt State Machines
+## 4. Print Attempt Tracking (`print_job_attempts`)
 
-### 3.1 `print_devices.status`
-- `pending` → Agent ran `agent-enroll`; cannot claim jobs or list download URLs.
-- `active` → Approved by Owner/Manager; may send heartbeats, sync printers, and claim jobs for its linked printers.
-- `paused` → Operator paused locally or Admin paused remotely; heartbeats continue, job claims paused.
-- `offline` *(derived operational view)* → `status = 'active'` but `now() - last_heartbeat_at > heartbeat_timeout` (e.g., 60–90 seconds); Admin UI flags device offline and prevents misleading "Ready" claims.
-- `revoked` → Credential invalidated by Owner/Manager; immediately returns `401/403` on all agent endpoints and triggers `needs_review` / lease release for any in-flight claimed job.
+To guarantee strict idempotency and prevent duplicate billing or ghost printing:
+1. Every claim generates an immutable attempt record with a unique `idempotency_key`.
+2. Fields tracked per attempt:
+   - `attempt_number` (1, 2, 3...)
+   - `device_id` & `printer_id`
+   - `windows_spooler_job_id` (nullable until accepted by Windows)
+   - `started_at`, `submitted_to_spooler_at`, `finished_at`
+   - `error_code` (e.g., `PRINTER_OFFLINE`, `PAPER_JAM`, `CORRUPT_PAYLOAD`)
+   - `error_message_safe` (sanitized for customer/admin display)
+3. **Database Invariant:** No job may have more than one active attempt (`finished_at IS NULL`) at any time.
 
-### 3.2 `print_job_attempts` (Idempotency Guarantee)
-Every execution pass creates a dedicated `print_job_attempts` record containing:
-- `attempt_number` (`1, 2, 3...`)
-- `idempotency_key` (UUID preventing duplicate attempt execution on network retry)
-- `device_id`, `printer_id`
-- `windows_spooler_job_id` (nullable until Windows Spooler accepts)
-- `started_at`, `submitted_to_spooler_at`, `finished_at`
-- `error_code`, `error_message_safe`, `created_by`
+---
 
-**Invariant:** No job may hold two simultaneous active (`finished_at IS NULL`) print attempts.
+## 5. Print Device State Machine (`print_devices`)
+
+The Windows 11 Local Print Agent device transitions through these states:
+- `pending`: Device requested enrollment (`agent-enroll`). Awaiting Super Admin approval. Cannot claim jobs.
+- `active`: Super Admin approved device. Heartbeats active. Authorized to claim jobs for linked printers.
+- `paused`: Super Admin paused remotely or operator paused in tray UI. Heartbeats continue, but job claims halted.
+- `offline`: (Derived view) Last heartbeat older than 90 seconds. System flags printers as unavailable.
+- `revoked`: Super Admin revoked device credential. All API requests rejected immediately (`401/403`).

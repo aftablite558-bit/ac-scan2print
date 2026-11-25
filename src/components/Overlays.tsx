@@ -169,6 +169,7 @@ const SearchModal: React.FC<{ onClose: () => void }> = ({ onClose }) => {
         { label: 'Payment Verification', sub: 'Scan2Print › UPI & Cash Counter', route: '#/print-management/payments' },
         { label: 'Pricing Rules', sub: 'Scan2Print › Per-Sheet & Page Rates', route: '#/print-management/pricing' },
         { label: 'Shop UPI Settings', sub: 'Scan2Print › UPI Handle & QR Code', route: '#/print-management/upi' },
+        { label: 'Pilot Launch & Readiness', sub: 'Scan2Print › Rollout, Cleanup & Incident Log', route: '#/print-management/pilot' },
         { label: 'Hardware & Printers', sub: 'Operations › Printer Registry', route: '#/hardware/printers' },
         { label: 'Agent Discovery Prep', sub: 'Hardware › Windows Agent', route: '#/hardware/discovery' },
         { label: 'Hardware Audit Checklist', sub: 'Hardware › Verification', route: '#/hardware/checklist' },

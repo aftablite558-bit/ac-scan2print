@@ -150,6 +150,9 @@ const DEFAULT_MOCK_CAPABILITIES: PortalCapabilities = {
       isMockSample: true,
     },
   ],
+  pilotStage: 'dry_run',
+  intakePaused: false,
+  pauseReason: null,
 };
 
 function randomTokenHex(bytes = 16): string {

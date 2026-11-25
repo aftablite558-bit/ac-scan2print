@@ -47,6 +47,7 @@ export function parseHash(hash: string): ParsedRoute {
   if (rawFirst === 'pricing') return { main: 'print-management', sub: 'pricing' };
   if (rawFirst === 'payments') return { main: 'print-management', sub: 'payments' };
   if (rawFirst === 'upi') return { main: 'print-management', sub: 'upi' };
+  if (rawFirst === 'pilot') return { main: 'print-management', sub: 'pilot' };
 
   const first = rawFirst as MainRoute;
   if (!VALID_MAINS.includes(first)) return { main: 'home' };
@@ -54,7 +55,7 @@ export function parseHash(hash: string): ParsedRoute {
   const sub = rawSub === 'catalog' ? 'services' : rawSub;
 
   if (first === 'print-management') {
-    const validPrintTabs = ['overview', 'jobs', 'queue', 'payments', 'pricing', 'upi', 'devices'];
+    const validPrintTabs = ['overview', 'jobs', 'queue', 'payments', 'pricing', 'upi', 'pilot', 'devices'];
     return {
       main: 'print-management',
       sub: sub && validPrintTabs.includes(sub) ? sub : 'overview',

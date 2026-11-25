@@ -1,94 +1,225 @@
 # AC Scan2Print (AMAN COMPUTER) — Smart QR Print System
-## Phase 1: End-to-End User Flows & Critical Business Workflows
+## Phase 1: End-to-End User Flows & Operational Workflows
 
-**Document Version:** 1.0  
+**Document Version:** 2.0 (Reconciled with Phase 0 Baseline & Fixed Owner Decisions)  
 **Phase:** Phase 1 — Product Specification & UX Design (Documentation Only)  
-**Date:** 20 November 2026  
+**Date:** November 24, 2026  
+**Status:** Approved Specification
 
 ---
 
 ## 1. End-to-End Customer Journey (`/quick-print*`)
 
-### Flow 1: QR Scan to Document Upload & Job Submission
-1. **QR Scan:** Customer scans shop permanent QR poster (`https://<domain>/quick-print`) using Android/iPhone camera.
-2. **Portal Landing (`/quick-print`):** Mobile-first screen loads quickly with Aman Computer / AC Scan2Print branding, 4-step summary, allowed types (`PDF`, `JPG/JPEG`, `PNG`), file size/count limits, privacy retention notice, and **Start Print Upload** CTA.
-3. **File Selection & Client Pre-Check (`/quick-print/upload`):**
-   - Customer picks 1–5 files (`<= 20 MB` each, configurable).
-   - Client checks extension, non-zero byte size, and count immediately for fast UX feedback.
-4. **Server-Side Session & Private Upload:**
-   - Frontend calls `create-print-job` with an idempotency key to create a `draft` job.
-   - Frontend requests short-lived signed upload URLs (`create-print-upload-url`) for randomized UUID object keys inside private bucket `print-uploads`.
-   - Files upload directly to Storage with per-file progress bar, cancel, and retry controls.
-5. **Server Validation & Options (`/quick-print/options`):**
-   - `finalize-print-upload` verifies object existence, file size, magic bytes (`%PDF-`, JPEG `FF D8 FF`, PNG `89 50 4E 47`), non-corrupt structure, and extracts verified page count.
-   - Portal presents **only** options supported by active shop printer profiles (`B&W` / `Colour`, `A4` / supported sizes, `Single-sided` / supported `Duplex`, `Copies`, `Page range`, `Orientation`, `Scaling`).
-   - Calls shared server-side pricing preview function to show **Estimated Amount** with clear label: *"Final price will be confirmed by counter operator."*
-6. **Idempotent Submission & Confirmation (`/quick-print/success`):**
-   - Customer taps **Submit Print Request**.
-   - Backend generates cryptographic `tracking_token` (stores only `tracking_token_hash`), moves job to `submitted`, emits `print_events` + admin notification, and returns `job_number` + `tracking_token`.
-   - Confirmation page shows `job_number`, copyable tracking link, summary, and next instruction. Browser refresh uses stored submission key and shows the same confirmation without creating a duplicate job.
-7. **Status Tracking (`/quick-print/track?token=...`):**
-   - Customer monitors live state (`Submitted` → `Under Review` → `Awaiting Payment` → `Approved` → `Queued` → `Printing` → `Ready for Collection / Completed`). Never exposes downloadable document URLs or internal admin notes.
+The Customer Portal is an isolated, lightweight, mobile-first web experience designed for walk-in customers scanning the counter QR code with their mobile device.
+
+```text
+[Counter QR Scan]
+       │
+       ▼
+[1. Print Home] ──► [2. Document Upload] ──► [3. Print Options & Estimate]
+                                                        │
+                                                        ▼
+[6. Live Status Tracking] ◄── [5. Confirmation] ◄── [4. Payment Selection]
+```
+
+### Step 1: QR Scan & Landing (`/quick-print`)
+1. **Physical Scan:** Customer arrives at Aman Computer shop counter and scans the permanent counter QR poster using their native smartphone camera or Google Lens.
+2. **Landing Screen:** The mobile browser opens `https://ac-scan2print.web.app/quick-print`.
+3. **Display Content:**
+   - Brand Header: AC Scan2Print monogram with Obsidian Dark `#111318` background and Electric Cyan `#25C7D9` accents.
+   - Title: **Smart QR Print — Aman Computer**.
+   - 4-Step Visual Guide: Scan → Upload & Options → Pay → Collect at Counter.
+   - Constraints Summary: Supported formats (`PDF`, `JPG`, `PNG`), max `20 MB` per file, max `5` files.
+   - Privacy Notice: "Files are stored in private encrypted storage and permanently deleted after 24 hours."
+   - Primary CTA: **Start Print Upload** (`#25C7D9` high-contrast button).
+   - Secondary Link: **Track Existing Job** (for returning customers).
+
+### Step 2: Document Upload (`/quick-print/upload`)
+1. **File Selection:** Customer taps file picker or drops files.
+2. **Client-Side Pre-Validation:**
+   - Rejects files exceeding 20 MB (20,971,520 bytes).
+   - Rejects files beyond the 5-file limit.
+   - Verifies extensions (`.pdf`, `.jpg`, `.jpeg`, `.png`).
+3. **Storage Allocation:**
+   - Client calls `create-print-job` to initiate a session and receive a temporary `job_id`.
+   - Client calls `create-print-upload-url` to receive a 120-second signed upload URL for private bucket `print-uploads`.
+4. **Direct Secure Upload:**
+   - Files are uploaded directly from the browser to Supabase Storage at `jobs/{job_id}/{file_id}.{ext}`.
+   - Per-file progress bars show real-time percentage, byte count, and cancel/retry buttons.
+5. **Server Magic-Byte Inspection:**
+   - Backend verifies binary magic bytes (`%PDF-` for PDF, `FF D8 FF` for JPEG, `89 50 4E 47` for PNG).
+   - Corrupt files or zero-byte payloads are rejected immediately with user-friendly error messages.
+
+### Step 3: Print Options & Pricing Estimate (`/quick-print/options`)
+1. **Dynamic Capability Filtering:**
+   - Only options supported by active shop printers are enabled.
+   - Hardware-dependent options (such as automatic duplex or A3 paper) default to safe fallback (Single-sided, A4) until hardware test verification is confirmed.
+2. **Configuration Form:**
+   - **Color Mode:** Black & White (default) or Colour.
+   - **Paper Size:** A4 (default). `A3` and `Legal` disabled unless printer profile confirms capability.
+   - **Print Sides:** Single-sided (default) or Double-sided (Duplex).
+   - **Copies:** Numeric stepper (1 to 20, default 1).
+   - **Page Range:** "All Pages" or Custom (e.g., `1-3, 5`).
+   - **Orientation:** Auto (default), Portrait, or Landscape.
+   - **Customer Identity (Optional):** Customer Name and Mobile Number inputs, explicitly labeled *(Optional — for counter pickup identification)*.
+3. **Duplex Pricing Disclosure & Formula:**
+   - Pricing follows the strict owner decision: **Duplex billing is calculated per physical paper sheet (`ceil(pages / 2)`)**, never per logical page.
+   - Clear banner: *"Double-sided printing is billed per sheet. For example, a 3-page document uses 2 sheets."*
+   - Price preview calls server-side pricing engine: displays calculated amount clearly labeled as **"₹X.XX (Estimated Total) — Final amount confirmed at counter"**.
+
+### Step 4: Payment Selection (`/quick-print/payment`)
+Customer selects their preferred payment method before submitting:
+- **Path A: Online UPI (Recommended for fast release)**
+  1. Displays Aman Computer official Shop UPI QR code (loaded from private bucket `payment-assets` via signed URL).
+  2. Displays Shop VPA / UPI ID with one-tap copy button.
+  3. Displays required exact amount.
+  4. Input: **12-digit UPI Reference / UTR Number** (required validation: exactly 12 alphanumeric characters).
+  5. Upload: **Payment Screenshot Proof** (optional but recommended; uploads to private bucket `payment-evidence` with 120s signed URL).
+  6. Notice: *"Once your UPI payment is verified, your job moves automatically to the print queue!"*
+- **Path B: Cash at Counter**
+  1. Customer toggles **Pay Cash at Counter**.
+  2. Notice: *"Please pay cash directly to the counter operator. The operator will confirm your payment and release your print job."*
+
+### Step 5: Submission & Idempotent Confirmation (`/quick-print/success`)
+1. Customer taps **Submit Print Job**.
+2. Frontend calls `finalize-print-upload` with an `idempotency_key`.
+3. Backend:
+   - Sets job status to `submitted`.
+   - If payment method is UPI and UTR provided, sets `payment_status = 'pending_verification'`.
+   - If payment method is Cash, sets `payment_status = 'unpaid'`.
+   - Generates high-entropy cryptographic `tracking_token` (256-bit random string).
+   - Stores `SHA-256(tracking_token)` in `print_jobs.tracking_token_hash`.
+   - Assigns human-friendly `job_number` (format: `AC-YYMMDD-XXXX`).
+   - Appends immutable `print_events` record.
+4. Confirmation Screen:
+   - Shows `job_number` in large high-contrast monospace typography.
+   - Stores `tracking_token` in browser `sessionStorage` so refreshing or bookmarking never creates a duplicate job.
+   - Copyable Tracking Link: `https://ac-scan2print.web.app/quick-print/track?token=...`.
+   - Immediate Counter Action: "Show this Job Number at the counter: **AC-261124-001**".
+
+### Step 6: Live Status Tracking (`/quick-print/track?token=...`)
+1. Customer monitors job progress in real-time or upon scanning the tracking link.
+2. Status Badges & Safe Progress Timeline:
+   - `Submitted` → "Received by Aman Computer"
+   - `Under Review` → "Operator reviewing file and print settings"
+   - `Awaiting Payment` → "Awaiting payment verification at counter"
+   - `Queued` → "Approved — In print queue"
+   - `Printing` → "Printing on shop printer..."
+   - `Completed` → "Ready for Collection! Collect your document at counter."
+   - `Needs Review` → "Checking print output at counter..."
+   - `Failed` / `Rejected` → Safe explanation without internal system error dumps.
+3. Security Guard:
+   - Document files, signed URLs, and internal staff notes are **never** returned or exposed in the tracking response.
 
 ---
 
-## 2. Critical Shop Counter & Print Workflows (Steps 1–11)
+## 2. Single-Admin Operational Workflow (Counter Operator)
 
-### Workflow Steps 2–6: Review, Pricing, Payment Verification & Mandatory Approval
-1. **Incoming Job Alert:** Admin Dashboard (`/admin/print-management` & topbar notification bell) receives new `submitted` job.
-2. **Operator Review (`/admin/print-jobs/:jobId`):**
-   - Operator opens Job Detail (`submitted` → `under_review`).
-   - Views uploaded files via short-lived authorized signed preview URL.
-   - Verifies extracted page count, orientation, legibility, and customer print settings (adjusts settings if customer chose suboptimal orientation/scaling).
-3. **Price Calculation & Confirmation:**
-   - Shared server pricing function computes exact `calculated_amount` from verified page count + active `print_pricing_rules`.
-   - Operator confirms `final_amount` (or applies an authorized manual override with mandatory `override_reason`).
-   - Job moves to `awaiting_payment` (or directly `approved` if shop policy allows post-print counter payment — configurable/pending owner confirmation, default: confirm payment before release).
-4. **Customer Payment (Cash or Manual UPI):**
-   - Customer pays Cash at the counter OR scans Aman Computer's shop UPI QR at the counter.
-   - **Strict Guard:** Customer never clicks "I Paid" to unlock printing.
-5. **Manual Payment Verification:**
-   - Operator verifies cash in hand or confirms incoming UPI credit on shop device.
-   - Operator clicks **Confirm Cash Received** or **Verify UPI Payment** (entering optional UPI reference ID) in `/admin/print-jobs/:jobId` or `/admin/payments`.
-   - Backend creates immutable `print_payment_records` entry (`status = 'paid'`, `confirmed_by = staff_id`, `confirmed_at`) and writes `print_events`.
-6. **Mandatory Job Approval & Queue Release:**
-   - Authorized Operator/Admin verifies assigned printer (`assigned_printer_id`) and clicks **Approve & Release to Print Queue** (transitions `approved` → `queued`).
-   - **Rule:** If payment is unpaid/pending, release is blocked unless an authorized pay-at-handover override rule exists (owner decision).
+The single Super Admin (`Yr0Wr7PuuAdOIMaqohmqaINNbNC2`) manages the entire counter workflow via the orange-themed Admin Dashboard (`/admin/*`).
 
-### Workflow Steps 7–11: Agent Claim, Printer Selection, Execution & Outcomes
-7. **Print Agent Job Claim:**
-   - Windows 11 Local Print Agent (active, non-paused, valid DPAPI device token, healthy heartbeat) polls `agent-claim-job`.
-   - Backend atomically checks: `job.status = 'queued'`, target printer belongs to this active device and is enabled/online, `claimed_by_device_id IS NULL`.
-   - Backend sets `status = 'claimed'`, `claimed_by_device_id`, `lease_expires_at` (e.g., 120s), creates `print_job_attempts` row with unique `idempotency_key`, and issues short-lived download URLs (`60–120s`).
-8. **Printer Selection & File Verification:**
-   - Agent downloads files to restricted temp folder (`downloading`), verifies `sha256_checksum` and byte size.
-   - Agent confirms target `system_printer_name` exists in Windows Print Spooler and checks `!IsOffline && !WorkOffline && !OutOfPaper`.
-   - If printer went offline at the last millisecond, Agent reports `failed` (with safe code `PRINTER_OFFLINE`) without submitting to spooler, keeping attempt unambiguous.
-9. **Printing Begins (Windows Print Spooler Submission):**
-   - Agent renders PDF pages or image layout silently with validated settings (`paper_size`, `colour/B&W`, `duplex`, `copies`, `page_range`, `orientation`, `scaling`).
-   - Submits job to Windows Print Spooler (`printing`), records `windows_spooler_job_id` in `print_job_attempts`, and reports `submitted_to_spooler`.
-10. **Completion, Failure, Needs Review & Reprint:**
-    - **Confirmed Success:** Spooler clears without error (plus operator handover confirmation where physical telemetry is limited) → `completed`, customer tracking updates to `Ready for Collection`, temp files purged locally, Storage retention timer starts (`24h`).
-    - **Confirmed Failure (Pre-Spooler / Explicit Driver Rejection):** Agent reports `failed` with safe reason (`CORRUPT_FILE`, `PRINTER_OFFLINE`, `OUT_OF_PAPER`). Admin receives alert and can safely click **Retry** after fixing printer.
-    - **Ambiguous Outcome (`needs_review`):** PC crashes, internet drops, or lease expires *after* spooler submission (`submitted_to_spooler_at IS NOT NULL`). System transitions job to **`needs_review`** and **never auto-reprints**. Operator visually checks physical paper tray at counter and either clicks **Mark Completed** or **Authorize Reprint** (recording reason + new `attempt_number`).
-11. **Customer Status Updates:**
-    - `/quick-print/track` reflects current state in near real-time (polling / safe subscription), showing *"Printing in progress"* vs *"Ready at counter"* without exposing spooler internals or files.
+```text
+[Incoming Job Alert]
+       │
+       ▼
+[Job Review & Settings Check]
+       │
+       ▼
+[Payment Verification] ───────────────┬────────────────────────┐
+  (UPI Verified)                      │                        │ (Cash Confirmed)
+       │                              ▼                        ▼
+       │                    [Price Override]          [Admin Job Approval]
+       │                    (Mandatory Reason)                 │
+       │                                                       ▼
+       └───────────────────────────────────────────────► [Release to Queue]
+                                                               │
+                                                               ▼
+                                                      [Local Agent Claims]
+                                                               │
+                                                               ▼
+                                                      [Windows Spooler]
+                                                               │
+                                                               ▼
+                                                      [Counter Handover]
+```
+
+### 1. Queue Intake & Job Review (`/admin/print-jobs/:jobId`)
+1. Topbar notification bell and live job table alert the Admin to a new `submitted` job.
+2. Admin opens the Job Detail view (`status` moves to `under_review`).
+3. Document Inspection:
+   - Admin views the uploaded document in the integrated private viewer using a 120-second signed URL.
+   - Verifies page count, legibility, orientation, and color distribution.
+4. Setting Adjustment:
+   - Admin can adjust orientation, paper size, or print mode if customer selected incorrect parameters.
+
+### 2. Pricing Calculation & Manual Override
+1. System displays **Calculated Amount** computed from verified page count, duplex rule (`ceil(pages / 2)`), active `print_pricing_rules`, and copies.
+2. If paper is damaged, special paper is requested, or customer requires a custom adjustment:
+   - Admin enters new `final_amount`.
+   - Admin MUST provide a non-empty `price_override_reason` (minimum 5 characters).
+   - System records `calculated_amount`, `final_amount`, `override_reason`, admin UID, and timestamp in `print_events`.
+
+### 3. Payment Verification & Queue Release (Fixed Invariants)
+Following the non-negotiable owner decisions:
+
+#### Scenario A: UPI Payment Verification (Auto-Release Rule)
+1. Customer submitted UPI payment with 12-digit UTR and/or payment screenshot.
+2. Admin opens Payment Verification panel:
+   - Views submitted 12-digit UTR number.
+   - Previews customer screenshot proof loaded from `payment-evidence` private bucket.
+   - Matches UTR with shop UPI soundbox / banking app credit notification.
+3. Admin clicks **Verify UPI Payment**.
+4. System sets `payment_status = 'paid'`, records `confirmed_by`, and generates audit event.
+5. **Auto-Release Trigger:** Because UPI payment is verified, the job **automatically qualifies for release to the print queue** (`queued`) without requiring a secondary manual approval button.
+
+#### Scenario B: Cash Payment Workflow (Explicit Admin Approval Required)
+1. Customer chose Cash at counter (`payment_status = 'unpaid'`).
+2. Customer hands physical cash to Admin at counter.
+3. Admin clicks **Confirm Cash Received**:
+   - System records cash receipt in `print_payment_records`.
+   - Sets `payment_status = 'paid'`.
+4. **Mandatory Approval Step:** Cash payment **requires explicit Admin approval**. Admin reviews assigned printer and clicks **Approve & Release to Print Queue** (`status` transitions from `approved` to `queued`).
+
+### 4. Job Rejection Workflow
+1. If the uploaded document is corrupt, illegal, unprintable, or customer abandons:
+2. Admin clicks **Reject Job**.
+3. A modal forces entry of a mandatory `rejection_reason` (e.g., "Blurry unreadable scan", "Customer requested cancellation").
+4. Job transitions to `rejected`.
+5. Customer tracking page reflects the rejection reason safely.
+6. Associated storage files are marked for 24-hour cleanup.
+
+### 5. Windows Agent Claim, Spooler Submission & Physical Verification
+1. The active Windows 11 Local Print Agent polls `agent-claim-job`.
+2. Agent locks the job with a 120-second lease (`claimed`), creates a `print_job_attempts` record, and downloads files over short-lived signed URLs (`downloading`).
+3. Agent checks printer status: confirms printer is online, ready, and has paper.
+4. Agent renders PDF/images and submits to Windows Print Spooler (`printing`), capturing `windows_spooler_job_id`.
+5. Status updates to `submitted_to_spooler`.
+6. Once the spooler completes and paper feeds through:
+   - Agent reports `completed`.
+   - Customer tracking updates to: "Ready for Collection!".
+   - Admin marks job handed over to customer.
+
+### 6. Ambiguous Outcome Handling (`needs_review`) & Reprint Guard
+1. **Ambiguous Condition:** If the shop PC crashes, power fluctuates, or the agent disconnects *after* the job was submitted to the Windows Spooler (`submitted_to_spooler_at IS NOT NULL`):
+   - The lease recovery sweeper moves the job to **`needs_review`**.
+   - **CRITICAL SAFEGUARD:** The system **NEVER auto-reprints** a job in `needs_review` to prevent wasted paper and duplicate charges.
+2. **Admin Physical Inspection:**
+   - Admin inspects the physical counter printer paper tray.
+   - **Case 1 (Printed Cleanly):** Admin clicks **Mark Completed**. Job transitions to `completed`.
+   - **Case 2 (Paper Jam / Incomplete):** Admin clears the jam, clicks **Authorize Reprint**, inputs mandatory `reprint_reason` (e.g., "Paper jam on page 2"), and releases a new attempt (`attempt_number + 1`) to `queued`.
 
 ---
 
-## 3. Operational & Security Support Flows
+## 3. Support & Maintenance Flows
 
-### Flow 12: Device Enrollment & Revocation
-1. Technician installs Windows 11 Print Agent → Agent generates hardware fingerprint & posts `agent-enroll` → receives temporary pending enrollment ID.
-2. Owner/Manager sees pending device in `/admin/print-agents`, verifies shop PC name, clicks **Approve Enrollment**.
-3. Agent exchanges approval for unique revocable device token stored encrypted via Windows DPAPI.
-4. If PC is stolen/replaced, Owner clicks **Revoke Device** → token immediately rejected across all Agent APIs + active claims released safely.
+### 1. Job Cancellation
+- Customer may cancel a job from `/quick-print/track` only while in `submitted` or `under_review` (before payment verification or spooler submission).
+- Admin may cancel an unprinted job from `/admin/print-jobs/:jobId` with a mandatory reason.
+- Once a job reaches `printing` or `submitted_to_spooler`, cancellation is disabled.
 
-### Flow 13: Printer Sync & Capability Override
-1. Agent calls `agent-sync-printers` on startup and device change, sending Windows-discovered printers and driver capability flags.
-2. Owner/Manager views `/admin/printers`, enables desired printers, sets friendly Display Names (`Counter 1 Laser B&W`, `Photo Inkjet Colour`), corrects any inaccurate driver flags (e.g., disables unreliable duplex), and runs a **Test Print**.
-
-### Flow 14: Permanent QR Code Verification & Poster Export
-1. Owner sets production domain in Settings / `/admin/qr-management` (`https://<domain>/quick-print`).
-2. System validates URL is public HTTPS `/quick-print` (rejects `/admin/*` or signed URLs).
-3. Admin downloads SVG/PNG QR or printable poster and physically verifies scan with Android + iOS cameras before counter placement.
+### 2. File Retention & Automated Purge Flow
+- Files in `print-uploads` and `payment-evidence` are private and temporary.
+- Retention rules:
+  - Unsubmitted drafts: 1 hour TTL.
+  - Completed / Rejected / Cancelled jobs: 24 hours TTL.
+  - Failed / Needs Review jobs: 72 hours TTL (allowing manual troubleshooting).
+- Background scheduled function (`cleanup-expired-print-files`) queries expired files, removes Storage objects via Supabase Storage API, updates `retention_deleted_at`, and appends an audit event.

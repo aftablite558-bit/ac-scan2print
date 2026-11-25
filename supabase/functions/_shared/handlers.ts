@@ -34,15 +34,20 @@ import {
 } from './printers.ts';
 import {
   buildAdminQueueItems,
+  computeAdminPilotSummary,
   computeAdminPrintDashboardMetrics,
   computeDeviceHeartbeatStatus,
   filterAndSortAdminJobs,
+  isValidPortalUrl,
+  normalizePilotChecklist,
 } from './printManagement.ts';
 import {
   AppError,
   type JobStatus,
   type Orientation,
   type PaperSize,
+  type PilotChecklist,
+  type PilotStage,
   type PrintAdminAccount,
   type PrintDevice,
   type PrintFile,
@@ -247,6 +252,14 @@ export async function handleCreatePrintJob(
     }
 
     const sys = await adapter.getSystemSettings();
+    if (sys.pilot_intake_paused) {
+      throw new AppError(
+        503,
+        'PORTAL_INTAKE_PAUSED',
+        sys.pilot_pause_reason?.trim() ||
+          'New print job submissions are temporarily paused at the shop counter. Please check with Aman Computer staff.'
+      );
+    }
 
     const paperSize = (typeof body.paperSize === 'string' ? body.paperSize : 'A4') as PaperSize;
     const printMode = (typeof body.printMode === 'string' ? body.printMode : 'bw') as PrintMode;
@@ -297,6 +310,13 @@ export async function handleCreatePrintJob(
         : null;
 
     if (idempotencyKey) {
+      if (idempotencyKey.length < 8 || /^\d+$/.test(idempotencyKey)) {
+        throw new AppError(
+          400,
+          'INVALID_IDEMPOTENCY_KEY',
+          'submissionIdempotencyKey must be at least 8 non-numeric characters.'
+        );
+      }
       const existing = await adapter.getJobByIdempotencyKey(idempotencyKey);
       if (existing) {
         return jsonResponse(
@@ -390,6 +410,9 @@ export async function handleCreatePrintUploadUrl(
     }
 
     const action = typeof body.action === 'string' ? body.action.trim() : 'issue';
+    if (action !== 'issue' && action !== 'remove_file') {
+      throw new AppError(400, 'UNSUPPORTED_ACTION', `Unsupported upload action '${action}'.`);
+    }
     if (action === 'remove_file') {
       const fileId = typeof body.fileId === 'string' ? body.fileId.trim() : '';
       if (!fileId) {
@@ -444,7 +467,17 @@ export async function handleCreatePrintUploadUrl(
       fileSizeBytes,
     });
 
-    const signed = await adapter.createSignedUploadUrl('print-uploads', storagePath, 120);
+    let signed: { signedUrl: string; token?: string; expiresInSeconds: number };
+    try {
+      signed = await adapter.createSignedUploadUrl('print-uploads', storagePath, 120);
+    } catch (err) {
+      await adapter.updateFileRecord(fileRecord.id, {
+        deleted_at: new Date().toISOString(),
+        validation_status: 'invalid',
+        validation_error: 'Signed upload URL issuance failed.',
+      });
+      throw err;
+    }
 
     await adapter.appendEvent({
       jobId: job.id,
@@ -856,6 +889,11 @@ export async function handleGetPublicPaymentSettings(
           supportedPaperSizes: orderedPaperSizes,
         },
         pricingRules: activeRules,
+        pilotStatus: {
+          pilotStage: boot.systemSettings.pilot_stage,
+          intakePaused: Boolean(boot.systemSettings.pilot_intake_paused),
+          pauseReason: boot.systemSettings.pilot_pause_reason ?? null,
+        },
       };
     }
 
@@ -901,7 +939,10 @@ export async function handleSubmitUpiPayment(
       throw new AppError(409, 'ALREADY_PAID', 'Job payment is already verified as paid.');
     }
 
-    const action = typeof body.action === 'string' ? body.action : 'submit';
+    const action = typeof body.action === 'string' ? body.action.trim() : 'submit';
+    if (action !== 'submit' && action !== 'prepare_evidence_upload') {
+      throw new AppError(400, 'UNSUPPORTED_ACTION', `Unsupported payment action '${action}'.`);
+    }
 
     if (action === 'prepare_evidence_upload') {
       const filename = typeof body.filename === 'string' ? body.filename : '';
@@ -936,6 +977,9 @@ export async function handleSubmitUpiPayment(
       throw new AppError(409, 'AMOUNT_NOT_CALCULATED', 'Server pricing has not been calculated for this job yet.');
     }
 
+    if (body.paymentMethod !== undefined && body.paymentMethod !== 'upi' && body.paymentMethod !== 'cash') {
+      throw new AppError(400, 'INVALID_PAYMENT_METHOD', "paymentMethod must be 'upi' or 'cash'.");
+    }
     const paymentMethod = body.paymentMethod === 'cash' ? 'cash' : 'upi';
 
     if (paymentMethod === 'cash') {
@@ -1087,9 +1131,26 @@ export async function handleAdminBootstrap(
   env: RuntimeEnv = {}
 ): Promise<Response> {
   return withHttpWrapper(req, 'POST', env, async (cors) => {
+    await requireRateLimit(adapter, `admin_bootstrap:${getClientIp(req)}`, 5, 300);
+
     const expectedSecret = env.ADMIN_BOOTSTRAP_SECRET?.trim() ?? '';
     if (!expectedSecret) {
       throw new AppError(503, 'BOOTSTRAP_NOT_CONFIGURED', 'ADMIN_BOOTSTRAP_SECRET is not configured on the server.');
+    }
+
+    const allowedOriginsRaw = env.ALLOWED_ORIGINS?.trim() ?? '';
+    const hasNonLocalOrigin = allowedOriginsRaw
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .some((origin) => !origin.includes('localhost') && !origin.includes('127.0.0.1'));
+    const allowedBootstrapUidForProd = env.ADMIN_BOOTSTRAP_ALLOWED_UID?.trim() ?? '';
+    if (hasNonLocalOrigin && !allowedBootstrapUidForProd) {
+      throw new AppError(
+        503,
+        'BOOTSTRAP_UID_ALLOWLIST_REQUIRED',
+        'ADMIN_BOOTSTRAP_ALLOWED_UID must be configured in production before bootstrapping Admin.'
+      );
     }
 
     const providedSecret = req.headers.get('x-admin-bootstrap-secret')?.trim() ?? '';
@@ -1209,8 +1270,16 @@ export async function handleAdminReviewPrintJob(
     if (!job) throw new AppError(404, 'JOB_NOT_FOUND', 'Print job not found.');
 
     if (action === 'override_price') {
-      if (isTerminalStatus(job.status) || job.payment_status === 'paid') {
-        throw new AppError(409, 'PRICE_LOCKED', 'Cannot override price after payment or terminal job completion.');
+      if (job.payment_status === 'pending_verification') {
+        throw new AppError(
+          409,
+          'PAYMENT_PENDING_VERIFICATION',
+          'Resolve or reject pending UPI payment verification before overriding the job price.'
+        );
+      }
+      const executionStatuses = new Set<JobStatus>(['queued', 'claimed', 'downloading', 'printing', 'submitted_to_spooler']);
+      if (isTerminalStatus(job.status) || job.payment_status === 'paid' || executionStatuses.has(job.status)) {
+        throw new AppError(409, 'PRICE_LOCKED', 'Cannot override price after payment, queue release, or terminal job completion.');
       }
       const newAmount = typeof body.finalAmount === 'number' ? body.finalAmount : Number(body.finalAmount);
       const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
@@ -1353,18 +1422,51 @@ export async function handleAdminVerifyPayment(
     const nowIso = new Date().toISOString();
 
     if (decision === 'approve') {
+      if (isTerminalStatus(job.status)) {
+        throw new AppError(409, 'JOB_TERMINAL', `Cannot verify payment for job in '${job.status}' state.`);
+      }
+      if (job.payment_status === 'paid') {
+        throw new AppError(409, 'ALREADY_PAID', 'Job payment is already verified as paid.');
+      }
+      if (job.final_amount === null || Math.round(Number(payment.amount) * 100) !== Math.round(Number(job.final_amount) * 100)) {
+        throw new AppError(
+          409,
+          'PAYMENT_AMOUNT_MISMATCH',
+          `Submitted payment amount (${payment.amount}) does not match current job amount (${job.final_amount}). Reject and ask customer to resubmit.`
+        );
+      }
+
+      const shouldAutoQualifyUpi =
+        payment.payment_method === 'upi' &&
+        (job.status === 'submitted' || job.status === 'under_review' || job.status === 'awaiting_payment');
+      const predictedJobStatus = shouldAutoQualifyUpi ? 'approved' : job.status;
+
+      let validatedPrinterId: string | null = null;
+      if (requestedPrinterId && payment.payment_method === 'upi' && predictedJobStatus === 'approved') {
+        const printer = await adapter.getPrinterById(requestedPrinterId);
+        if (
+          !printer ||
+          printer.archived_at ||
+          printer.approval_status === 'pending_review' ||
+          printer.approval_status === 'rejected' ||
+          !printer.is_enabled ||
+          printer.printer_status === 'disabled'
+        ) {
+          throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Selected printer is missing or disabled.');
+        }
+        const activeAttempts = await adapter.getActiveAttemptsForJob(job.id);
+        if (activeAttempts.length > 0) {
+          throw new AppError(409, 'ACTIVE_ATTEMPT_EXISTS', 'An active print attempt already exists for this job.');
+        }
+        validatedPrinterId = printer.id;
+      }
+
       const updatedPayment = await adapter.updatePayment(payment.id, {
         payment_status: 'paid',
         verified_by: admin.id,
         verified_at: nowIso,
         rejection_reason: null,
       });
-
-      // Verified UPI payments automatically qualify for the print queue without requiring
-      // a redundant manual Admin "Approve Job" step.
-      const shouldAutoQualifyUpi =
-        payment.payment_method === 'upi' &&
-        (job.status === 'submitted' || job.status === 'under_review' || job.status === 'awaiting_payment');
 
       let currentJob = await adapter.updateJob(job.id, {
         payment_status: 'paid',
@@ -1400,25 +1502,10 @@ export async function handleAdminVerifyPayment(
       }
 
       let autoReleased = false;
-      if (requestedPrinterId && payment.payment_method === 'upi' && currentJob.status === 'approved') {
-        const printer = await adapter.getPrinterById(requestedPrinterId);
-        if (
-          !printer ||
-          printer.archived_at ||
-          printer.approval_status === 'pending_review' ||
-          printer.approval_status === 'rejected' ||
-          !printer.is_enabled ||
-          printer.printer_status === 'disabled'
-        ) {
-          throw new AppError(409, 'PRINTER_UNAVAILABLE', 'Selected printer is missing or disabled.');
-        }
-        const activeAttempts = await adapter.getActiveAttemptsForJob(currentJob.id);
-        if (activeAttempts.length > 0) {
-          throw new AppError(409, 'ACTIVE_ATTEMPT_EXISTS', 'An active print attempt already exists for this job.');
-        }
+      if (validatedPrinterId) {
         currentJob = await adapter.releaseJobToQueue({
           jobId: currentJob.id,
-          printerId: printer.id,
+          printerId: validatedPrinterId,
           adminId: admin.id,
         });
         autoReleased = true;
@@ -1777,7 +1864,10 @@ export async function handleAdminRetryPrintJob(
     const body = await parseJsonBody(req);
 
     const jobId = typeof body.jobId === 'string' ? body.jobId.trim() : '';
-    const action = typeof body.action === 'string' ? body.action : 'retry';
+    const action = typeof body.action === 'string' ? body.action.trim() : 'retry';
+    if (action !== 'retry' && action !== 'mark_completed' && action !== 'cancel') {
+      throw new AppError(400, 'UNSUPPORTED_ACTION', `Unsupported retry/reconcile action '${action}'.`);
+    }
     const reason = typeof body.reason === 'string' ? body.reason.trim() : '';
     if (!jobId) throw new AppError(400, 'MISSING_JOB_ID', 'jobId is required.');
     if (!isValidUuid(jobId)) throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
@@ -1881,6 +1971,113 @@ export async function handleAdminRetryPrintJob(
 // ---------------------------------------------------------------------------
 // 14. Retention Cleanup: cleanup-expired-print-files
 // ---------------------------------------------------------------------------
+async function executeRetentionCleanupCore(input: {
+  adapter: Scan2PrintBackendAdapter;
+  executedBy: string;
+  requestedDryRun: boolean;
+  nowMs?: number;
+}) {
+  const { adapter, executedBy, requestedDryRun } = input;
+  const sys = await adapter.getSystemSettings();
+  const effectiveDryRun =
+    requestedDryRun || (executedBy === 'cron' && (!sys.retention_policy_confirmed || !sys.auto_cleanup_enabled));
+
+  const nowMs = Number.isFinite(input.nowMs) ? Number(input.nowMs) : Date.now();
+  const nowIso = new Date(nowMs).toISOString();
+
+  const jobs = await adapter.listJobsForRetentionCheck();
+  let jobsExpired = 0;
+  let filesMarkedDeleted = 0;
+  let storageObjectsRemoved = 0;
+  let skippedActiveOrDisputed = 0;
+  const processedJobIds: string[] = [];
+
+  for (const job of jobs) {
+    const payments = await adapter.getPaymentsForJob(job.id);
+    const hasPendingVerification = payments.some((p) => p.payment_status === 'pending_verification');
+
+    const verdict = canCleanupDeleteFiles(job, hasPendingVerification, nowMs, {
+      draftHours: sys.draft_retention_hours,
+      completedHours: sys.completed_retention_hours,
+      failedHours: sys.failed_retention_hours,
+    });
+
+    if (!verdict.eligible) {
+      if (verdict.reason === 'active_job_protected' || verdict.reason === 'disputed_or_pending_payment') {
+        skippedActiveOrDisputed += 1;
+      }
+      continue;
+    }
+
+    const files = (await adapter.getFilesForJob(job.id)).filter((f) => !f.deleted_at);
+    if (files.length === 0 && job.status !== 'draft') {
+      continue;
+    }
+
+    processedJobIds.push(job.id);
+
+    if (!effectiveDryRun) {
+      for (const f of files) {
+        const deleted = await adapter.deleteStorageObject(f.storage_bucket, f.storage_path);
+        if (deleted) storageObjectsRemoved += 1;
+        await adapter.updateFileRecord(f.id, { deleted_at: nowIso });
+        filesMarkedDeleted += 1;
+      }
+
+      if (job.status === 'draft' || job.status === 'failed' || job.status === 'needs_review') {
+        assertTransition(job.status, 'expired');
+        await adapter.updateJob(job.id, { status: 'expired', expires_at: nowIso, draft_upload_secret_hash: null });
+        await adapter.appendEvent({
+          jobId: job.id,
+          actorType: 'system',
+          actorId: null,
+          eventType: 'retention_job_expired',
+          previousStatus: job.status,
+          newStatus: 'expired',
+          metadata: { reason: verdict.reason, files_deleted: files.length },
+        });
+        jobsExpired += 1;
+      } else {
+        await adapter.updateJob(job.id, { expires_at: nowIso });
+        await adapter.appendEvent({
+          jobId: job.id,
+          actorType: 'system',
+          actorId: null,
+          eventType: 'retention_files_purged',
+          previousStatus: job.status,
+          newStatus: job.status,
+          metadata: { reason: verdict.reason, files_deleted: files.length },
+        });
+      }
+    } else {
+      filesMarkedDeleted += files.length;
+      if (job.status === 'draft' || job.status === 'failed' || job.status === 'needs_review') {
+        jobsExpired += 1;
+      }
+    }
+  }
+
+  const log = await adapter.createCleanupLog({
+    run_mode: effectiveDryRun ? 'dry_run' : 'execute',
+    jobs_expired: jobsExpired,
+    files_marked_deleted: filesMarkedDeleted,
+    storage_objects_removed: storageObjectsRemoved,
+    skipped_active_or_disputed: skippedActiveOrDisputed,
+    details: { processed_job_ids: processedJobIds },
+    executed_by: executedBy,
+  });
+
+  return {
+    log,
+    mode: log.run_mode,
+    retentionPolicyConfirmed: sys.retention_policy_confirmed,
+    jobsExpired,
+    filesMarkedDeleted,
+    storageObjectsRemoved,
+    skippedActiveOrDisputed,
+  };
+}
+
 export async function handleCleanupExpiredPrintFiles(
   req: Request,
   adapter: Scan2PrintBackendAdapter,
@@ -1899,106 +2096,25 @@ export async function handleCleanupExpiredPrintFiles(
     }
 
     const body = await parseJsonBody(req).catch((): Record<string, unknown> => ({}));
-    const sys = await adapter.getSystemSettings();
-
     const requestedDryRun = typeof body.dryRun === 'boolean' ? body.dryRun : false;
-    const effectiveDryRun =
-      requestedDryRun || (executedBy === 'cron' && (!sys.retention_policy_confirmed || !sys.auto_cleanup_enabled));
-
     const nowMs = typeof body.nowIso === 'string' ? Date.parse(body.nowIso) : Date.now();
-    const nowIso = new Date(nowMs).toISOString();
 
-    const jobs = await adapter.listJobsForRetentionCheck();
-    let jobsExpired = 0;
-    let filesMarkedDeleted = 0;
-    let storageObjectsRemoved = 0;
-    let skippedActiveOrDisputed = 0;
-    const processedJobIds: string[] = [];
-
-    for (const job of jobs) {
-      const payments = await adapter.getPaymentsForJob(job.id);
-      const hasPendingVerification = payments.some((p) => p.payment_status === 'pending_verification');
-
-      const verdict = canCleanupDeleteFiles(job, hasPendingVerification, nowMs, {
-        draftHours: sys.draft_retention_hours,
-        completedHours: sys.completed_retention_hours,
-        failedHours: sys.failed_retention_hours,
-      });
-
-      if (!verdict.eligible) {
-        if (verdict.reason === 'active_job_protected' || verdict.reason === 'disputed_or_pending_payment') {
-          skippedActiveOrDisputed += 1;
-        }
-        continue;
-      }
-
-      const files = (await adapter.getFilesForJob(job.id)).filter((f) => !f.deleted_at);
-      if (files.length === 0 && job.status !== 'draft') {
-        continue;
-      }
-
-      processedJobIds.push(job.id);
-
-      if (!effectiveDryRun) {
-        for (const f of files) {
-          const deleted = await adapter.deleteStorageObject(f.storage_bucket, f.storage_path);
-          if (deleted) storageObjectsRemoved += 1;
-          await adapter.updateFileRecord(f.id, { deleted_at: nowIso });
-          filesMarkedDeleted += 1;
-        }
-
-        if (job.status === 'draft' || job.status === 'failed' || job.status === 'needs_review') {
-          assertTransition(job.status, 'expired');
-          await adapter.updateJob(job.id, { status: 'expired', expires_at: nowIso, draft_upload_secret_hash: null });
-          await adapter.appendEvent({
-            jobId: job.id,
-            actorType: 'system',
-            actorId: null,
-            eventType: 'retention_job_expired',
-            previousStatus: job.status,
-            newStatus: 'expired',
-            metadata: { reason: verdict.reason, files_deleted: files.length },
-          });
-          jobsExpired += 1;
-        } else {
-          await adapter.updateJob(job.id, { expires_at: nowIso });
-          await adapter.appendEvent({
-            jobId: job.id,
-            actorType: 'system',
-            actorId: null,
-            eventType: 'retention_files_purged',
-            previousStatus: job.status,
-            newStatus: job.status,
-            metadata: { reason: verdict.reason, files_deleted: files.length },
-          });
-        }
-      } else {
-        filesMarkedDeleted += files.length;
-        if (job.status === 'draft' || job.status === 'failed' || job.status === 'needs_review') {
-          jobsExpired += 1;
-        }
-      }
-    }
-
-    const log = await adapter.createCleanupLog({
-      run_mode: effectiveDryRun ? 'dry_run' : 'execute',
-      jobs_expired: jobsExpired,
-      files_marked_deleted: filesMarkedDeleted,
-      storage_objects_removed: storageObjectsRemoved,
-      skipped_active_or_disputed: skippedActiveOrDisputed,
-      details: { processed_job_ids: processedJobIds },
-      executed_by: executedBy,
+    const result = await executeRetentionCleanupCore({
+      adapter,
+      executedBy,
+      requestedDryRun,
+      nowMs,
     });
 
     return jsonResponse(
       200,
       {
-        mode: log.run_mode,
-        retentionPolicyConfirmed: sys.retention_policy_confirmed,
-        jobsExpired,
-        filesMarkedDeleted,
-        storageObjectsRemoved,
-        skippedActiveOrDisputed,
+        mode: result.mode,
+        retentionPolicyConfirmed: result.retentionPolicyConfirmed,
+        jobsExpired: result.jobsExpired,
+        filesMarkedDeleted: result.filesMarkedDeleted,
+        storageObjectsRemoved: result.storageObjectsRemoved,
+        skippedActiveOrDisputed: result.skippedActiveOrDisputed,
       },
       cors
     );
@@ -2015,6 +2131,7 @@ export async function handleAgentEnroll(
 ): Promise<Response> {
   return withHttpWrapper(req, 'POST', env, async (cors) => {
     const admin = await requireMvpAdmin(req, adapter, env);
+    await requireRateLimit(adapter, `agent_enroll:${admin.id}`, 20, 300);
     const body = await parseJsonBody(req);
 
     const deviceName = typeof body.deviceName === 'string' ? body.deviceName.trim() : '';
@@ -2066,6 +2183,7 @@ export async function handleAgentHeartbeat(
 ): Promise<Response> {
   return withHttpWrapper(req, 'POST', env, async (cors) => {
     const device = await requireActiveDevice(req, adapter);
+    await requireRateLimit(adapter, `agent_heartbeat:${device.id}`, 120, 60);
     const body = await parseJsonBody(req).catch((): Record<string, unknown> => ({}));
     const nowIso = new Date().toISOString();
 
@@ -2076,13 +2194,32 @@ export async function handleAgentHeartbeat(
     });
 
     if (Array.isArray(body.printers) && adapter.updatePrinterStatus) {
-      for (const item of body.printers) {
+      const ownedPrinters = adapter.listPrinters
+        ? (await adapter.listPrinters({ includeArchived: false })).filter((pr) => pr.device_id === device.id)
+        : [];
+      for (const item of body.printers.slice(0, 50)) {
         if (!item || typeof item !== 'object') continue;
         const p = item as Record<string, unknown>;
         if (typeof p.printerId === 'string' && typeof p.printerStatus === 'string') {
           const allowed = new Set(['online', 'offline', 'error', 'paused', 'disabled', 'unknown']);
-          if (allowed.has(p.printerStatus)) {
-            await adapter.updatePrinterStatus(p.printerId, {
+          if (!allowed.has(p.printerStatus)) continue;
+          const candidateKey = p.printerId.trim();
+          let targetPrinterId: string | null = null;
+          if (isValidUuid(candidateKey)) {
+            const printer = await adapter.getPrinterById(candidateKey);
+            if (printer && printer.device_id === device.id && !printer.archived_at) {
+              targetPrinterId = printer.id;
+            }
+          } else {
+            const bySystemName = ownedPrinters.find(
+              (pr) => pr.system_printer_name === candidateKey && !pr.archived_at
+            );
+            if (bySystemName) {
+              targetPrinterId = bySystemName.id;
+            }
+          }
+          if (targetPrinterId) {
+            await adapter.updatePrinterStatus(targetPrinterId, {
               printer_status: p.printerStatus as 'online' | 'offline' | 'error' | 'paused' | 'disabled' | 'unknown',
               last_seen_at: nowIso,
             });
@@ -2105,6 +2242,7 @@ export async function handleAgentClaimJob(
 ): Promise<Response> {
   return withHttpWrapper(req, 'POST', env, async (cors) => {
     const device = await requireActiveDevice(req, adapter);
+    await requireRateLimit(adapter, `agent_claim:${device.id}`, 120, 60);
     const body = await parseJsonBody(req).catch((): Record<string, unknown> => ({}));
 
     const configuredLease = Number(env.AGENT_CLAIM_LEASE_SECONDS ?? 180);
@@ -2188,6 +2326,7 @@ export async function handleAgentReportJobEvent(
 ): Promise<Response> {
   return withHttpWrapper(req, 'POST', env, async (cors) => {
     const device = await requireActiveDevice(req, adapter);
+    await requireRateLimit(adapter, `agent_report:${device.id}`, 180, 60);
     const body = await parseJsonBody(req);
 
     const attemptId = typeof body.attemptId === 'string' ? body.attemptId.trim() : '';
@@ -2747,6 +2886,7 @@ export async function handleAgentSyncPrinters(
 ): Promise<Response> {
   return withHttpWrapper(req, 'POST', env, async (cors) => {
     const device = await requireActiveDevice(req, adapter);
+    await requireRateLimit(adapter, `agent_sync:${device.id}`, 30, 60);
     if (!adapter.listPrinters || !adapter.createPrinter || !adapter.updatePrinter) {
       throw new AppError(500, 'SERVER_MISCONFIGURED', 'Printer sync adapter methods are not configured.');
     }
@@ -3003,13 +3143,28 @@ export async function handleAdminPrintJobs(
     const nowMs = Date.parse(nowIso);
 
     if (action === 'list') {
-      const [allJobs, allPayments, printers, devices, pricingRules, paymentSettings] = await Promise.all([
+      const [
+        allJobs,
+        allPayments,
+        printers,
+        devices,
+        pricingRules,
+        paymentSettings,
+        systemSettings,
+        attempts,
+        recentEvents,
+        cleanupLogs,
+      ] = await Promise.all([
         adapter.listPrintJobs(),
         adapter.listAllPayments(),
         adapter.listPrinters({ includeArchived: true }),
         adapter.listDevices(),
         adapter.listPricingRules ? adapter.listPricingRules() : Promise.resolve([]),
         adapter.getPaymentSettings(),
+        adapter.getSystemSettings(),
+        adapter.listAllAttempts ? adapter.listAllAttempts(500) : Promise.resolve([]),
+        adapter.listRecentEvents ? adapter.listRecentEvents(80) : Promise.resolve([]),
+        adapter.listCleanupLogs ? adapter.listCleanupLogs(15) : Promise.resolve([]),
       ]);
 
       const jobMap = new Map(allJobs.map((j) => [j.id, j]));
@@ -3171,6 +3326,36 @@ export async function handleAdminPrintJobs(
         }
       }
 
+      const pilotSummary = computeAdminPilotSummary({
+        systemSettings,
+        paymentSettings,
+        jobs: allJobs,
+        payments: allPayments,
+        printers,
+        devices,
+        pricingRules,
+        attempts,
+        events: recentEvents,
+        cleanupLogs,
+        nowIso,
+      });
+
+      const PILOT_EVENT_TYPES = new Set([
+        'pilot_settings_updated',
+        'pilot_intake_paused',
+        'pilot_intake_resumed',
+        'pilot_go_live_approved',
+        'pilot_observation_logged',
+        'pilot_cleanup_triggered',
+        'retention_job_expired',
+        'retention_files_purged',
+        'payment_verification_rejected',
+        'admin_manual_retry_authorized',
+      ]);
+      const recentPilotEvents = recentEvents
+        .filter((ev) => PILOT_EVENT_TYPES.has(ev.event_type))
+        .slice(0, 30);
+
       return jsonResponse(
         200,
         {
@@ -3185,6 +3370,10 @@ export async function handleAdminPrintJobs(
           pricingRules,
           paymentSettings: toAdminPaymentSettingsSummary(paymentSettings),
           upiQrSignedUrl,
+          systemSettings,
+          pilotSummary,
+          recentPilotEvents,
+          cleanupLogs,
           serverNowIso: nowIso,
         },
         cors
@@ -3540,6 +3729,365 @@ export async function handleAdminPrintJobs(
             ...toPublicDeviceSummary(d),
             onlineStatus: computeDeviceHeartbeatStatus(d, nowMs),
           })),
+        },
+        cors
+      );
+    }
+
+    if (action === 'pilot_update_settings') {
+      if (!adapter.updateSystemSettings) {
+        throw new AppError(500, 'SERVER_MISCONFIGURED', 'System settings update adapter method is missing.');
+      }
+
+      const [
+        currentSys,
+        paymentSettings,
+        allJobs,
+        allPayments,
+        printers,
+        devices,
+        pricingRules,
+        attempts,
+        recentEvents,
+        cleanupLogs,
+      ] = await Promise.all([
+        adapter.getSystemSettings(),
+        adapter.getPaymentSettings(),
+        adapter.listPrintJobs(),
+        adapter.listAllPayments(),
+        adapter.listPrinters({ includeArchived: true }),
+        adapter.listDevices(),
+        adapter.listPricingRules ? adapter.listPricingRules() : Promise.resolve([]),
+        adapter.listAllAttempts ? adapter.listAllAttempts(500) : Promise.resolve([]),
+        adapter.listRecentEvents ? adapter.listRecentEvents(80) : Promise.resolve([]),
+        adapter.listCleanupLogs ? adapter.listCleanupLogs(15) : Promise.resolve([]),
+      ]);
+
+      const allowedStages = new Set<PilotStage>(['dry_run', 'supervised_pilot', 'live_pilot', 'production']);
+      const nextStage: PilotStage =
+        body.pilotStage !== undefined
+          ? typeof body.pilotStage === 'string' && allowedStages.has(body.pilotStage as PilotStage)
+            ? (body.pilotStage as PilotStage)
+            : (() => {
+                throw new AppError(400, 'INVALID_PILOT_STAGE', 'Unsupported pilotStage.');
+              })()
+          : currentSys.pilot_stage;
+
+      let nextPortalUrl = currentSys.customer_portal_url;
+      if (body.customerPortalUrl !== undefined) {
+        if (body.customerPortalUrl === null || body.customerPortalUrl === '') {
+          nextPortalUrl = null;
+        } else if (typeof body.customerPortalUrl === 'string') {
+          const trimmed = body.customerPortalUrl.trim().slice(0, 300);
+          if (!isValidPortalUrl(trimmed)) {
+            throw new AppError(
+              400,
+              'INVALID_PORTAL_URL',
+              'Customer portal URL must use https:// (or http://localhost for development testing).'
+            );
+          }
+          nextPortalUrl = trimmed;
+        } else {
+          throw new AppError(400, 'INVALID_PORTAL_URL', 'customerPortalUrl must be a string.');
+        }
+      }
+
+      const nextIntakePaused =
+        typeof body.pilotIntakePaused === 'boolean'
+          ? body.pilotIntakePaused
+          : currentSys.pilot_intake_paused;
+
+      const nextPauseReason =
+        body.pilotPauseReason === null
+          ? null
+          : typeof body.pilotPauseReason === 'string'
+            ? body.pilotPauseReason.trim().slice(0, 240) || null
+            : nextIntakePaused
+              ? currentSys.pilot_pause_reason
+              : null;
+
+      let nextTargetJobs = currentSys.pilot_target_jobs;
+      if (body.pilotTargetJobs !== undefined) {
+        const parsed = Number(body.pilotTargetJobs);
+        if (!Number.isInteger(parsed) || parsed < 10 || parsed > 500) {
+          throw new AppError(400, 'INVALID_PILOT_TARGET', 'pilotTargetJobs must be an integer between 10 and 500.');
+        }
+        nextTargetJobs = parsed;
+      }
+
+      const validateRetentionHours = (val: unknown, fallback: number, label: string): number => {
+        if (val === undefined) return fallback;
+        const parsed = Number(val);
+        if (!Number.isInteger(parsed) || parsed < 1 || parsed > 720) {
+          throw new AppError(400, 'INVALID_RETENTION_HOURS', `${label} must be an integer between 1 and 720 hours.`);
+        }
+        return parsed;
+      };
+
+      const nextDraftHours = validateRetentionHours(
+        body.draftRetentionHours,
+        currentSys.draft_retention_hours,
+        'draftRetentionHours'
+      );
+      const nextCompletedHours = validateRetentionHours(
+        body.completedRetentionHours,
+        currentSys.completed_retention_hours,
+        'completedRetentionHours'
+      );
+      const nextFailedHours = validateRetentionHours(
+        body.failedRetentionHours,
+        currentSys.failed_retention_hours,
+        'failedRetentionHours'
+      );
+      const nextRetentionConfirmed =
+        typeof body.retentionPolicyConfirmed === 'boolean'
+          ? body.retentionPolicyConfirmed
+          : currentSys.retention_policy_confirmed;
+      const nextAutoCleanup =
+        typeof body.autoCleanupEnabled === 'boolean'
+          ? body.autoCleanupEnabled
+          : currentSys.auto_cleanup_enabled;
+
+      let nextChecklist: PilotChecklist = { ...currentSys.pilot_checklist };
+      if (body.pilotChecklist && typeof body.pilotChecklist === 'object' && !Array.isArray(body.pilotChecklist)) {
+        const raw = body.pilotChecklist as Record<string, unknown>;
+        nextChecklist = normalizePilotChecklist({
+          shopPcInstalled:
+            raw.shopPcInstalled !== undefined ? raw.shopPcInstalled === true : nextChecklist.shopPcInstalled,
+          printerTested:
+            raw.printerTested !== undefined ? raw.printerTested === true : nextChecklist.printerTested,
+          qrPosterDisplayed:
+            raw.qrPosterDisplayed !== undefined ? raw.qrPosterDisplayed === true : nextChecklist.qrPosterDisplayed,
+          staffTrained:
+            raw.staffTrained !== undefined ? raw.staffTrained === true : nextChecklist.staffTrained,
+          backupTested:
+            raw.backupTested !== undefined ? raw.backupTested === true : nextChecklist.backupTested,
+        });
+      }
+
+      const candidateSettings = {
+        ...currentSys,
+        customer_portal_url: nextPortalUrl,
+        draft_retention_hours: nextDraftHours,
+        completed_retention_hours: nextCompletedHours,
+        failed_retention_hours: nextFailedHours,
+        retention_policy_confirmed: nextRetentionConfirmed,
+        auto_cleanup_enabled: nextAutoCleanup,
+        pilot_stage: nextStage,
+        pilot_intake_paused: nextIntakePaused,
+        pilot_pause_reason: nextPauseReason,
+        pilot_target_jobs: nextTargetJobs,
+        pilot_checklist: nextChecklist,
+      };
+
+      const candidateSummary = computeAdminPilotSummary({
+        systemSettings: candidateSettings,
+        paymentSettings,
+        jobs: allJobs,
+        payments: allPayments,
+        printers,
+        devices,
+        pricingRules,
+        attempts,
+        events: recentEvents,
+        cleanupLogs,
+        nowIso,
+      });
+
+      if (nextStage === 'production' && currentSys.pilot_stage !== 'production' && !candidateSummary.readyForGoLive) {
+        throw new AppError(
+          409,
+          'PILOT_GO_LIVE_BLOCKED',
+          `Cannot approve Production Go-Live until blocking readiness gates pass: ${candidateSummary.blockingGateReasons.join(' | ')}`
+        );
+      }
+
+      const nextGoLiveApprovedAt =
+        nextStage === 'production'
+          ? currentSys.pilot_go_live_approved_at ?? nowIso
+          : currentSys.pilot_go_live_approved_at;
+
+      const updatedSys = await adapter.updateSystemSettings({
+        customer_portal_url: nextPortalUrl,
+        draft_retention_hours: nextDraftHours,
+        completed_retention_hours: nextCompletedHours,
+        failed_retention_hours: nextFailedHours,
+        retention_policy_confirmed: nextRetentionConfirmed,
+        auto_cleanup_enabled: nextAutoCleanup,
+        pilot_stage: nextStage,
+        pilot_intake_paused: nextIntakePaused,
+        pilot_pause_reason: nextPauseReason,
+        pilot_target_jobs: nextTargetJobs,
+        pilot_go_live_approved_at: nextGoLiveApprovedAt,
+        pilot_checklist: nextChecklist,
+        updated_by: admin.id,
+      });
+
+      if (nextIntakePaused !== currentSys.pilot_intake_paused) {
+        await adapter.appendEvent({
+          jobId: null,
+          actorType: 'admin',
+          actorId: admin.id,
+          eventType: nextIntakePaused ? 'pilot_intake_paused' : 'pilot_intake_resumed',
+          previousStatus: currentSys.pilot_intake_paused ? 'paused' : 'open',
+          newStatus: nextIntakePaused ? 'paused' : 'open',
+          metadata: { reason: nextPauseReason },
+        });
+      } else if (nextStage === 'production' && currentSys.pilot_stage !== 'production') {
+        await adapter.appendEvent({
+          jobId: null,
+          actorType: 'admin',
+          actorId: admin.id,
+          eventType: 'pilot_go_live_approved',
+          previousStatus: currentSys.pilot_stage,
+          newStatus: 'production',
+          metadata: {
+            customer_portal_url: updatedSys.customer_portal_url,
+            submitted_jobs: candidateSummary.submittedJobsCount,
+            completed_jobs: candidateSummary.completedCount,
+          },
+        });
+      } else {
+        await adapter.appendEvent({
+          jobId: null,
+          actorType: 'admin',
+          actorId: admin.id,
+          eventType: 'pilot_settings_updated',
+          previousStatus: currentSys.pilot_stage,
+          newStatus: updatedSys.pilot_stage,
+          metadata: {
+            customer_portal_url: updatedSys.customer_portal_url,
+            retention_policy_confirmed: updatedSys.retention_policy_confirmed,
+            auto_cleanup_enabled: updatedSys.auto_cleanup_enabled,
+            pilot_target_jobs: updatedSys.pilot_target_jobs,
+          },
+        });
+      }
+
+      const finalSummary = computeAdminPilotSummary({
+        systemSettings: updatedSys,
+        paymentSettings,
+        jobs: allJobs,
+        payments: allPayments,
+        printers,
+        devices,
+        pricingRules,
+        attempts,
+        events: recentEvents,
+        cleanupLogs,
+        nowIso,
+      });
+
+      return jsonResponse(
+        200,
+        {
+          systemSettings: updatedSys,
+          pilotSummary: finalSummary,
+        },
+        cors
+      );
+    }
+
+    if (action === 'pilot_log_note') {
+      const allowedCategories = new Set([
+        'upload_failure',
+        'printer_issue',
+        'payment_dispute',
+        'customer_feedback',
+        'sop_note',
+      ]);
+      const category = typeof body.category === 'string' ? body.category.trim() : '';
+      if (!allowedCategories.has(category)) {
+        throw new AppError(
+          400,
+          'INVALID_OBSERVATION_CATEGORY',
+          'category must be one of upload_failure, printer_issue, payment_dispute, customer_feedback, or sop_note.'
+        );
+      }
+      const allowedSeverity = new Set(['info', 'warning', 'critical']);
+      const severity =
+        typeof body.severity === 'string' && allowedSeverity.has(body.severity.trim())
+          ? body.severity.trim()
+          : 'info';
+      const note = typeof body.note === 'string' ? body.note.trim().slice(0, 500) : '';
+      if (note.length < 3) {
+        throw new AppError(400, 'OBSERVATION_NOTE_REQUIRED', 'Enter a pilot observation note (at least 3 characters).');
+      }
+
+      let linkedJobId: string | null = null;
+      if (typeof body.jobId === 'string' && body.jobId.trim()) {
+        const candidateId = body.jobId.trim();
+        if (!isValidUuid(candidateId)) {
+          throw new AppError(400, 'INVALID_JOB_ID', 'jobId must be a valid UUID.');
+        }
+        const linkedJob = await adapter.getJobById(candidateId);
+        if (!linkedJob) {
+          throw new AppError(404, 'JOB_NOT_FOUND', 'Linked print job not found.');
+        }
+        linkedJobId = linkedJob.id;
+      }
+
+      const sys = await adapter.getSystemSettings();
+      const event = await adapter.appendEvent({
+        jobId: linkedJobId,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'pilot_observation_logged',
+        previousStatus: null,
+        newStatus: severity,
+        metadata: {
+          category,
+          severity,
+          note,
+          pilot_stage: sys.pilot_stage,
+        },
+      });
+
+      return jsonResponse(201, { event }, cors);
+    }
+
+    if (action === 'pilot_run_cleanup') {
+      const mode = body.mode === 'execute' ? 'execute' : 'dry_run';
+      const sys = await adapter.getSystemSettings();
+      if (mode === 'execute' && !sys.retention_policy_confirmed) {
+        throw new AppError(
+          409,
+          'RETENTION_CONFIRMATION_REQUIRED',
+          'Confirm the document retention policy before executing destructive file cleanup.'
+        );
+      }
+
+      const cleanupResult = await executeRetentionCleanupCore({
+        adapter,
+        executedBy: `admin:${admin.id}`,
+        requestedDryRun: mode === 'dry_run',
+        nowMs: typeof body.nowIso === 'string' ? Date.parse(body.nowIso) : nowMs,
+      });
+
+      await adapter.appendEvent({
+        jobId: null,
+        actorType: 'admin',
+        actorId: admin.id,
+        eventType: 'pilot_cleanup_triggered',
+        previousStatus: null,
+        newStatus: cleanupResult.mode,
+        metadata: {
+          jobs_expired: cleanupResult.jobsExpired,
+          files_marked_deleted: cleanupResult.filesMarkedDeleted,
+          storage_objects_removed: cleanupResult.storageObjectsRemoved,
+          skipped_active_or_disputed: cleanupResult.skippedActiveOrDisputed,
+        },
+      });
+
+      return jsonResponse(
+        200,
+        {
+          mode: cleanupResult.mode,
+          jobsExpired: cleanupResult.jobsExpired,
+          filesMarkedDeleted: cleanupResult.filesMarkedDeleted,
+          storageObjectsRemoved: cleanupResult.storageObjectsRemoved,
+          skippedActiveOrDisputed: cleanupResult.skippedActiveOrDisputed,
+          log: cleanupResult.log,
         },
         cors
       );

@@ -230,6 +230,16 @@ export interface PrintPaymentSettings {
   updated_by: string | null;
 }
 
+export type PilotStage = 'dry_run' | 'supervised_pilot' | 'live_pilot' | 'production';
+
+export interface PilotChecklist {
+  shopPcInstalled: boolean;
+  printerTested: boolean;
+  qrPosterDisplayed: boolean;
+  staffTrained: boolean;
+  backupTested: boolean;
+}
+
 export interface PrintSystemSettings {
   id: number;
   customer_portal_url: string | null;
@@ -241,6 +251,12 @@ export interface PrintSystemSettings {
   failed_retention_hours: number;
   retention_policy_confirmed: boolean;
   auto_cleanup_enabled: boolean;
+  pilot_stage: PilotStage;
+  pilot_intake_paused: boolean;
+  pilot_pause_reason: string | null;
+  pilot_target_jobs: number;
+  pilot_go_live_approved_at: string | null;
+  pilot_checklist: PilotChecklist;
   updated_at: string;
   updated_by: string | null;
 }
@@ -274,6 +290,9 @@ export interface PublicPortalBootstrapData {
     | 'max_copies'
     | 'draft_retention_hours'
     | 'completed_retention_hours'
+    | 'pilot_stage'
+    | 'pilot_intake_paused'
+    | 'pilot_pause_reason'
   >;
   printers: Array<
     Pick<
@@ -344,6 +363,26 @@ export interface Scan2PrintBackendAdapter {
 
   // System & Payment Settings
   getSystemSettings(): Promise<PrintSystemSettings>;
+  updateSystemSettings?(
+    patch: Partial<
+      Pick<
+        PrintSystemSettings,
+        | 'customer_portal_url'
+        | 'draft_retention_hours'
+        | 'completed_retention_hours'
+        | 'failed_retention_hours'
+        | 'retention_policy_confirmed'
+        | 'auto_cleanup_enabled'
+        | 'pilot_stage'
+        | 'pilot_intake_paused'
+        | 'pilot_pause_reason'
+        | 'pilot_target_jobs'
+        | 'pilot_go_live_approved_at'
+        | 'pilot_checklist'
+        | 'updated_by'
+      >
+    >
+  ): Promise<PrintSystemSettings>;
   getPaymentSettings(): Promise<PrintPaymentSettings>;
   getPublicPortalBootstrapData?(): Promise<PublicPortalBootstrapData>;
   updatePaymentSettings(
@@ -478,6 +517,7 @@ export interface Scan2PrintBackendAdapter {
   updateDevice(deviceId: string, patch: Partial<PrintDevice>): Promise<PrintDevice>;
   getActiveAttemptsForJob(jobId: string): Promise<PrintJobAttempt[]>;
   listAttemptsForJob?(jobId: string): Promise<PrintJobAttempt[]>;
+  listAllAttempts?(limit?: number): Promise<PrintJobAttempt[]>;
   getAttemptById(attemptId: string): Promise<PrintJobAttempt | null>;
   updateAttempt(attemptId: string, patch: Partial<PrintJobAttempt>): Promise<PrintJobAttempt>;
   listRecentEvents?(limit?: number, eventTypes?: string[]): Promise<PrintEvent[]>;
@@ -506,6 +546,7 @@ export interface Scan2PrintBackendAdapter {
     metadata?: Record<string, unknown>;
   }): Promise<PrintEvent>;
   createCleanupLog(input: Omit<PrintCleanupLog, 'id' | 'executed_at'>): Promise<PrintCleanupLog>;
+  listCleanupLogs?(limit?: number): Promise<PrintCleanupLog[]>;
 
   // Private Storage
   createSignedUploadUrl(

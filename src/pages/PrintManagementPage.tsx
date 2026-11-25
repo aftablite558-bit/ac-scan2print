@@ -25,6 +25,8 @@ import {
   ShieldOff,
   Sliders,
   Upload,
+  Volume2,
+  VolumeX,
   X,
   XCircle,
 } from 'lucide-react';
@@ -33,9 +35,18 @@ import {
   ConfirmActionDialog,
   type ConfirmDialogConfig,
 } from '../components/print-management/ConfirmActionDialog';
+import { PilotLaunchPanel } from '../components/print-management/PilotLaunchPanel';
 import { PrintJobDetailModal } from '../components/print-management/PrintJobDetailModal';
+import { ShopQrPosterModal } from '../components/print-management/ShopQrPosterModal';
 import { useAdmin } from '../context/AdminContext';
 import { dur, gsap, popIcon, reducedMotion, revealCards, revealText } from '../utils/animations';
+import {
+  detectQueueNotifications,
+  loadSoundAlertsEnabled,
+  playCounterChime,
+  saveSoundAlertsEnabled,
+  type QueueAlertSnapshot,
+} from '../utils/counterAlerts';
 import {
   DEVICE_STATUS_META,
   JOB_STATUS_META,
@@ -53,15 +64,19 @@ import {
   isValidUpiHandle,
   pricingRuleToDraft,
   validatePricingRuleDraft,
+  type AdminCleanupLog,
   type AdminDeviceSummary,
   type AdminJobDetailResponse,
   type AdminPaymentVerificationItem,
+  type AdminPilotSummary,
   type AdminPrintDashboardMetrics,
+  type AdminPrintEvent,
   type AdminPrintJobSummary,
   type AdminPrintPaymentSettings,
   type AdminPrintPricingRule,
   type AdminPrinterSummary,
   type AdminQueueItem,
+  type AdminSystemSettings,
   type PaperSize,
   type PrintMode,
   type PrintSides,
@@ -81,6 +96,10 @@ interface AdminPrintJobsListResponse {
   pricingRules?: AdminPrintPricingRule[];
   paymentSettings?: AdminPrintPaymentSettings;
   upiQrSignedUrl?: string | null;
+  systemSettings?: AdminSystemSettings;
+  pilotSummary?: AdminPilotSummary;
+  recentPilotEvents?: AdminPrintEvent[];
+  cleanupLogs?: AdminCleanupLog[];
   serverNowIso?: string;
 }
 
@@ -107,7 +126,7 @@ const EMPTY_METRICS: AdminPrintDashboardMetrics = {
   pendingVerificationPayments: 0,
 };
 
-type PrintTabId = 'overview' | 'jobs' | 'queue' | 'payments' | 'pricing' | 'upi' | 'devices';
+type PrintTabId = 'overview' | 'jobs' | 'queue' | 'payments' | 'pricing' | 'upi' | 'pilot' | 'devices';
 
 export const PrintManagementPage: React.FC = () => {
   const { route, navigate, invokeAdminEdgeFunction, showToast } = useAdmin();
@@ -126,6 +145,10 @@ export const PrintManagementPage: React.FC = () => {
   const [pricingRules, setPricingRules] = useState<AdminPrintPricingRule[]>([]);
   const [paymentSettings, setPaymentSettings] = useState<AdminPrintPaymentSettings | null>(null);
   const [upiQrSignedUrl, setUpiQrSignedUrl] = useState<string | null>(null);
+  const [systemSettings, setSystemSettings] = useState<AdminSystemSettings | null>(null);
+  const [pilotSummary, setPilotSummary] = useState<AdminPilotSummary | null>(null);
+  const [recentPilotEvents, setRecentPilotEvents] = useState<AdminPrintEvent[]>([]);
+  const [cleanupLogs, setCleanupLogs] = useState<AdminCleanupLog[]>([]);
   const [verifyPrinterChoice, setVerifyPrinterChoice] = useState<Record<string, string>>({});
 
   const [loading, setLoading] = useState(true);
@@ -182,10 +205,15 @@ export const PrintManagementPage: React.FC = () => {
     undefined
   );
   const [qrUploading, setQrUploading] = useState(false);
+  const [qrPosterOpen, setQrPosterOpen] = useState(false);
+  const [soundAlertsEnabled, setSoundAlertsEnabled] = useState<boolean>(() =>
+    loadSoundAlertsEnabled()
+  );
 
   const rootRef = useRef<HTMLDivElement>(null);
   const h1Ref = useRef<HTMLHeadingElement>(null);
   const tabPanelRef = useRef<HTMLDivElement>(null);
+  const prevAlertSnapshotRef = useRef<QueueAlertSnapshot | null>(null);
 
   useEffect(() => {
     setDetailJobId(null);
@@ -234,11 +262,32 @@ export const PrintManagementPage: React.FC = () => {
     if (res.upiQrSignedUrl !== undefined) {
       setUpiQrSignedUrl(res.upiQrSignedUrl);
     }
-    setLoadError(null);
-  }, []);
+    if (res.systemSettings) setSystemSettings(res.systemSettings);
+    if (res.pilotSummary) setPilotSummary(res.pilotSummary);
+    setRecentPilotEvents(Array.isArray(res.recentPilotEvents) ? res.recentPilotEvents : []);
+    setCleanupLogs(Array.isArray(res.cleanupLogs) ? res.cleanupLogs : []);
 
-  const loadWorkspace = useCallback(async () => {
-    setLoading(true);
+    const nextSnapshot: QueueAlertSnapshot = {
+      totalJobs: res.metrics?.totalJobs ?? 0,
+      pendingPayments: Array.isArray(res.paymentVerifications) ? res.paymentVerifications.length : 0,
+      attentionJobs: (res.metrics?.failedJobs ?? 0) + (res.metrics?.needsReviewJobs ?? 0),
+      completedJobs: res.metrics?.completedJobs ?? 0,
+    };
+    const alertEvents = detectQueueNotifications(prevAlertSnapshotRef.current, nextSnapshot);
+    prevAlertSnapshotRef.current = nextSnapshot;
+    if (alertEvents.length > 0) {
+      const topAlert = alertEvents[0];
+      showToast(topAlert.title, topAlert.tone === 'bad' || topAlert.tone === 'warn' ? 'bad' : 'good');
+      if (soundAlertsEnabled) {
+        playCounterChime(topAlert.kind);
+      }
+    }
+
+    setLoadError(null);
+  }, [showToast, soundAlertsEnabled]);
+
+  const loadWorkspace = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
       const res = await invokeAdminEdgeFunction<AdminPrintJobsListResponse>('admin-print-jobs', {
         action: 'list',
@@ -257,9 +306,11 @@ export const PrintManagementPage: React.FC = () => {
       });
       applySnapshot(res);
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : 'Unable to load Print Management workspace.');
+      if (!silent) {
+        setLoadError(err instanceof Error ? err.message : 'Unable to load Print Management workspace.');
+      }
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }, [
     applySnapshot,
@@ -280,6 +331,16 @@ export const PrintManagementPage: React.FC = () => {
   useEffect(() => {
     void loadWorkspace();
   }, [loadWorkspace]);
+
+  // Background live queue polling every 20 seconds for real-time counter alerts
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+      if (actionBusy || qrPosterOpen || detailJobId || enrollOpen || ruleEditorOpen) return;
+      void loadWorkspace(true);
+    }, 20000);
+    return () => window.clearInterval(timer);
+  }, [actionBusy, detailJobId, enrollOpen, loadWorkspace, qrPosterOpen, ruleEditorOpen]);
 
   const loadJobDetail = useCallback(
     async (jobId: string) => {
@@ -484,6 +545,33 @@ export const PrintManagementPage: React.FC = () => {
         <div className="flex flex-wrap items-center gap-2.5 shrink-0">
           <button
             type="button"
+            onClick={() => {
+              const next = !soundAlertsEnabled;
+              setSoundAlertsEnabled(next);
+              saveSoundAlertsEnabled(next);
+              if (next) playCounterChime('new_job');
+              showToast(next ? 'Counter sound alerts enabled.' : 'Counter sound alerts muted.', 'good');
+            }}
+            className="btn-ghost px-3.5 py-2 rounded-full text-[13px] font-medium inline-flex items-center gap-2 cursor-pointer"
+            aria-pressed={soundAlertsEnabled}
+          >
+            {soundAlertsEnabled ? (
+              <Volume2 size={14} className="text-[var(--good)]" />
+            ) : (
+              <VolumeX size={14} className="text-[var(--muted)]" />
+            )}
+            <span>{soundAlertsEnabled ? 'Sound Alerts On' : 'Alerts Muted'}</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setQrPosterOpen(true)}
+            className="btn-ghost px-3.5 py-2 rounded-full text-[13px] font-medium inline-flex items-center gap-2 cursor-pointer"
+          >
+            <QrCode size={14} className="text-[#25C7D9]" />
+            <span>Shop QR Poster</span>
+          </button>
+          <button
+            type="button"
             disabled={loading}
             onClick={(e) => {
               popIcon(e.currentTarget);
@@ -521,8 +609,33 @@ export const PrintManagementPage: React.FC = () => {
           },
           { id: 'pricing', label: 'Pricing Rules', href: '#/print-management/pricing', count: pricingRules.length },
           { id: 'upi', label: 'UPI Settings', href: '#/print-management/upi' },
+          { id: 'pilot', label: 'Pilot Launch', href: '#/print-management/pilot' },
         ]}
       />
+
+      {systemSettings?.pilot_intake_paused && (
+        <div className="rounded-[16px] p-4 bg-[var(--warn-soft)] border border-[var(--warn)]/35 flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-start gap-2.5 text-[13px]">
+            <PauseCircle size={18} className="text-[var(--warn)] shrink-0 mt-0.5" />
+            <div>
+              <span className="font-bold text-[var(--ink)]">Customer Portal Intake Paused: </span>
+              <span className="text-[var(--ink-2)]">
+                {systemSettings.pilot_pause_reason ||
+                  'New customer QR uploads are paused while counter tracking continues.'}
+              </span>
+            </div>
+          </div>
+          {activeTab !== 'pilot' && (
+            <button
+              type="button"
+              onClick={() => navigate('#/print-management/pilot')}
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer shrink-0"
+            >
+              Manage in Pilot Launch
+            </button>
+          )}
+        </div>
+      )}
 
       {loadError && (
         <div className="rounded-[16px] p-4 bg-[var(--bad-soft)] border border-[var(--bad)]/25 text-[var(--bad)] flex items-center justify-between gap-3">
@@ -2283,6 +2396,28 @@ export const PrintManagementPage: React.FC = () => {
             </form>
           </section>
         )}
+
+        {/* ================================================================
+            TAB 7: PHASE 11 CONTROLLED PILOT LAUNCH & READINESS
+           ================================================================ */}
+        {activeTab === 'pilot' && (
+          <PilotLaunchPanel
+            systemSettings={systemSettings}
+            pilotSummary={pilotSummary}
+            recentPilotEvents={recentPilotEvents}
+            cleanupLogs={cleanupLogs}
+            actionBusy={actionBusy}
+            onInvokeAction={async (payload, successMsg) => {
+              await executeProtectedAction(async () => {
+                await invokeAdminEdgeFunction('admin-print-jobs', payload);
+                showToast(successMsg, 'good');
+              });
+            }}
+            onRequestConfirm={(cfg) => setConfirmConfig(cfg)}
+            onOpenQrPoster={() => setQrPosterOpen(true)}
+            onNavigateTab={(href) => navigate(href)}
+          />
+        )}
       </div>
 
       {/* Enroll Shop PC Modal */}
@@ -2422,6 +2557,13 @@ export const PrintManagementPage: React.FC = () => {
         config={confirmConfig}
         busy={actionBusy}
         onClose={() => setConfirmConfig(null)}
+      />
+
+      {/* Counter Shop QR Standee & Poster Modal */}
+      <ShopQrPosterModal
+        open={qrPosterOpen}
+        onClose={() => setQrPosterOpen(false)}
+        defaultPortalUrl={systemSettings?.customer_portal_url || undefined}
       />
     </div>
   );

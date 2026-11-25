@@ -257,6 +257,93 @@ export interface AdminJobDetailResponse {
   pricingRule: AdminPrintPricingRule | null;
 }
 
+export type PilotStage = 'dry_run' | 'supervised_pilot' | 'live_pilot' | 'production';
+
+export interface PilotChecklist {
+  shopPcInstalled: boolean;
+  printerTested: boolean;
+  qrPosterDisplayed: boolean;
+  staffTrained: boolean;
+  backupTested: boolean;
+}
+
+export interface AdminSystemSettings {
+  id: number;
+  customer_portal_url: string | null;
+  max_file_size_bytes: number;
+  max_files_per_job: number;
+  max_copies: number;
+  draft_retention_hours: number;
+  completed_retention_hours: number;
+  failed_retention_hours: number;
+  retention_policy_confirmed: boolean;
+  auto_cleanup_enabled: boolean;
+  pilot_stage: PilotStage;
+  pilot_intake_paused: boolean;
+  pilot_pause_reason: string | null;
+  pilot_target_jobs: number;
+  pilot_go_live_approved_at: string | null;
+  pilot_checklist: PilotChecklist;
+  updated_at: string;
+  updated_by: string | null;
+}
+
+export interface AdminCleanupLog {
+  id: string;
+  run_mode: 'dry_run' | 'execute';
+  jobs_expired: number;
+  files_marked_deleted: number;
+  storage_objects_removed: number;
+  skipped_active_or_disputed: number;
+  details: Record<string, unknown>;
+  executed_by: string;
+  executed_at: string;
+}
+
+export interface PilotReadinessGate {
+  id:
+    | 'agent_online'
+    | 'verified_printer'
+    | 'active_pricing_rule'
+    | 'payment_ready'
+    | 'portal_url_configured'
+    | 'retention_confirmed'
+    | 'dry_run_completed'
+    | 'checklist_signed_off';
+  label: string;
+  passed: boolean;
+  detail: string;
+  blockingForGoLive: boolean;
+}
+
+export interface AdminPilotSummary {
+  pilotStage: PilotStage;
+  intakePaused: boolean;
+  pauseReason: string | null;
+  pilotTargetJobs: number;
+  goLiveApprovedAt: string | null;
+  checklist: PilotChecklist;
+  submittedJobsCount: number;
+  progressPct: number;
+  completedCount: number;
+  failedCount: number;
+  needsReviewCount: number;
+  rejectedCount: number;
+  cancelledCount: number;
+  activeInFlightCount: number;
+  completionRatePct: number | null;
+  failureOrReviewRatePct: number | null;
+  avgReviewToApproveMinutes: number | null;
+  avgEndToEndMinutes: number | null;
+  paymentMismatchOrRejectionCount: number;
+  totalAttemptsCount: number;
+  reprintOrRetryCount: number;
+  lastCleanupRun: AdminCleanupLog | null;
+  readinessGates: PilotReadinessGate[];
+  readyForGoLive: boolean;
+  blockingGateReasons: string[];
+}
+
 export interface PricingRuleFormDraft {
   ruleId: string | null;
   ruleName: string;

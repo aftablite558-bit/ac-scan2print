@@ -1,10 +1,12 @@
 import React, { useId, useState } from 'react';
 import {
+  AlertTriangle,
   ArrowLeft,
   ArrowRight,
   CheckCircle2,
   FileText,
   RefreshCw,
+  Search,
   Trash2,
   UploadCloud,
 } from 'lucide-react';
@@ -28,17 +30,59 @@ export const UploadPage: React.FC = () => {
   const fileInputId = useId();
   const [isDragging, setIsDragging] = useState(false);
 
+  const intakePaused = Boolean(capabilities?.intakePaused);
   const maxFiles = capabilities?.maxFilesPerJob ?? 5;
   const maxBytes = capabilities?.maxFileSizeBytes ?? 20 * 1024 * 1024;
   const uploadedCount = selectedFiles.filter((f) => f.status === 'uploaded').length;
   const uploadingAny = selectedFiles.some((f) => f.status === 'uploading');
   const hasErrors = selectedFiles.some((f) => f.status === 'error');
-  const canContinue = uploadedCount > 0 && !uploadingAny;
+  const canContinue = !intakePaused && uploadedCount > 0 && !uploadingAny;
 
   const handleFilesSelected = (files: FileList | null) => {
-    if (!files || files.length === 0) return;
+    if (intakePaused || !files || files.length === 0) return;
     void addFiles(files);
   };
+
+  if (intakePaused) {
+    return (
+      <div className="space-y-4">
+        <WorkflowStepper currentStep="upload" />
+        <section className="portal-card p-5 sm:p-6 space-y-4">
+          <div className="rounded-[16px] p-4 bg-[var(--warn-soft)] border border-[var(--warn)]/35 flex items-start gap-3">
+            <AlertTriangle size={20} className="text-[var(--warn)] shrink-0 mt-0.5" aria-hidden="true" />
+            <div className="space-y-1.5">
+              <h1 className="text-[18px] font-bold leading-tight">
+                Print Intake Temporarily Paused
+              </h1>
+              <p className="text-[13.5px] text-[var(--color-text-secondary)] m-0">
+                {capabilities?.pauseReason ||
+                  'Counter intake is temporarily paused by Aman Computer Admin. Existing orders continue to process normally.'}
+              </p>
+            </div>
+          </div>
+
+          <div className="flex flex-col sm:flex-row gap-2.5">
+            <button
+              type="button"
+              onClick={() => navigate('/quick-print')}
+              className="portal-btn-secondary px-4 py-2.5 text-[14px] inline-flex items-center justify-center gap-1.5 cursor-pointer"
+            >
+              <ArrowLeft size={16} aria-hidden="true" />
+              <span>Return Home</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/quick-print/track')}
+              className="portal-btn-primary px-5 py-2.5 text-[14px] inline-flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Search size={16} aria-hidden="true" />
+              <span>Track Existing Job</span>
+            </button>
+          </div>
+        </section>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
