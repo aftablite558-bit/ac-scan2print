@@ -3,7 +3,7 @@ import { Check, CheckCircle2, Copy, Plus, Search, Share2, ShieldCheck } from 'lu
 import { StatusBadge } from '../components/StatusBadge';
 import { WorkflowStepper } from '../components/WorkflowStepper';
 import { usePortal } from '../context/PortalContext';
-import { formatInr, getCustomerSafeStatusMeta } from '../lib/pricing';
+import { formatInr, getCustomerSafeStatusMeta, getFinishingAddon } from '../lib/pricing';
 import { formatFileSize } from '../lib/validation';
 
 export const ConfirmationPage: React.FC = () => {
@@ -181,6 +181,12 @@ export const ConfirmationPage: React.FC = () => {
               {confirmation.preferences.printMode === 'bw' ? 'B&W' : 'Colour'} ·{' '}
               {confirmation.preferences.printSides === 'duplex' ? 'Double-sided' : 'Single-sided'} ·{' '}
               {confirmation.preferences.copies} {confirmation.preferences.copies === 1 ? 'copy' : 'copies'}
+              {confirmation.preferences.pagesPerSheet > 1
+                ? ` · ${confirmation.preferences.pagesPerSheet}-in-1`
+                : ''}
+              {confirmation.preferences.finishingService !== 'none'
+                ? ` · ${getFinishingAddon(confirmation.preferences.finishingService).label}`
+                : ''}
             </span>
           </div>
           <div className="flex justify-between gap-2">

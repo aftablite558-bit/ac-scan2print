@@ -69,7 +69,7 @@ public class EnrollmentDialog : Form
 
         var tokenLabel = new Label
         {
-            Text = "Super Admin Token / Pairing Key:",
+            Text = "Admin JWT or One-Time Device Credential (dev_...):",
             Location = new Point(25, 155),
             AutoSize = true
         };
@@ -140,22 +140,44 @@ public class EnrollmentDialog : Form
         }
 
         _enrollBtn.Enabled = false;
-        _statusLabel.Text = "Contacting Supabase Edge Function to pair device...";
         _statusLabel.ForeColor = Color.Cyan;
 
         try
         {
-            var res = await _apiClient.EnrollDeviceAsync(token, devName, Environment.OSVersion.ToString(), "1.0.4");
+            bool looksLikeJwt = token.Split('.').Length == 3 && !token.StartsWith("dev_", StringComparison.OrdinalIgnoreCase);
 
-            // Encrypt and persist with Windows DPAPI
-            _dpapiStorage.SaveProtectedSecret("ACScan2Print_DeviceId", res.DeviceId.ToString());
-            _dpapiStorage.SaveProtectedSecret("ACScan2Print_DeviceCredential", res.DeviceCredential);
+            if (looksLikeJwt)
+            {
+                _statusLabel.Text = "Enrolling PC with Supabase Edge Function (agent-enroll)...";
+                var res = await _apiClient.EnrollDeviceAsync(token, devName, Environment.OSVersion.ToString(), "1.0.4");
 
-            _statusLabel.Text = $"Device Enrolled Successfully! ID: {res.DeviceId}";
-            _statusLabel.ForeColor = Color.LightGreen;
+                _dpapiStorage.SaveProtectedSecret("ACScan2Print_DeviceId", res.DeviceId.ToString());
+                _dpapiStorage.SaveProtectedSecret("ACScan2Print_DeviceCredential", res.DeviceCredential);
 
-            MessageBox.Show($"Device '{res.DeviceName}' successfully enrolled!\nCredentials securely encrypted using Windows DPAPI.", "Enrollment Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
-            Close();
+                _statusLabel.Text = $"Device Enrolled Successfully! ID: {res.DeviceId}";
+                _statusLabel.ForeColor = Color.LightGreen;
+
+                MessageBox.Show($"Device '{res.DeviceName}' successfully enrolled!\nCredentials securely encrypted using Windows DPAPI (LocalMachine).", "Enrollment Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Close();
+            }
+            else
+            {
+                _statusLabel.Text = "Verifying one-time device credential via agent-heartbeat...";
+                var hb = await _apiClient.SendHeartbeatAsync(token, "1.0.4", Environment.OSVersion.ToString(), null);
+                if (!hb.Ok || hb.DeviceId == Guid.Empty || !string.Equals(hb.DeviceStatus, "active", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException($"Device credential rejected or inactive (status={hb.DeviceStatus ?? "unknown"}).");
+                }
+
+                _dpapiStorage.SaveProtectedSecret("ACScan2Print_DeviceId", hb.DeviceId.ToString());
+                _dpapiStorage.SaveProtectedSecret("ACScan2Print_DeviceCredential", token);
+
+                _statusLabel.Text = $"Device Paired Successfully! ID: {hb.DeviceId}";
+                _statusLabel.ForeColor = Color.LightGreen;
+
+                MessageBox.Show($"Device '{devName}' ({hb.DeviceId}) paired using one-time device credential!\nCredentials encrypted with Windows DPAPI (LocalMachine).", "Enrollment Complete", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                Close();
+            }
         }
         catch (Exception ex)
         {

@@ -392,6 +392,8 @@ export class MockCustomerPortalAdapter implements CustomerPortalApiAdapter {
       ...(req.copies !== undefined ? { copies: req.copies } : {}),
       ...(req.orientation !== undefined ? { orientation: req.orientation } : {}),
       ...(req.scaling !== undefined ? { scaling: req.scaling } : {}),
+      ...(req.pagesPerSheet !== undefined ? { pagesPerSheet: req.pagesPerSheet } : {}),
+      ...(req.finishingService !== undefined ? { finishingService: req.finishingService } : {}),
       ...(req.requestedPageRange !== undefined ? { requestedPageRange: req.requestedPageRange } : {}),
       ...(req.customerName !== undefined ? { customerName: req.customerName } : {}),
       ...(req.customerPhone !== undefined ? { customerPhone: req.customerPhone } : {}),
@@ -428,6 +430,8 @@ export class MockCustomerPortalAdapter implements CustomerPortalApiAdapter {
       paperSize: job.req.paperSize,
       printMode: job.req.printMode,
       printSides: job.req.printSides,
+      pagesPerSheet: job.req.pagesPerSheet,
+      finishingService: job.req.finishingService,
       rules: DEFAULT_MOCK_CAPABILITIES.pricingRules,
     });
 

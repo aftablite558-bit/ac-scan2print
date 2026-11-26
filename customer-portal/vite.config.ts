@@ -1,15 +1,18 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { defineConfig } from 'vite';
 
+const PORTAL_DIR = path.dirname(fileURLToPath(import.meta.url));
+
 export default defineConfig({
-  root: path.resolve(__dirname),
-  envDir: path.resolve(__dirname, '..'),
-  publicDir: path.resolve(__dirname, 'public'),
+  root: PORTAL_DIR,
+  envDir: path.resolve(PORTAL_DIR, '..'),
+  publicDir: path.resolve(PORTAL_DIR, 'public'),
   plugins: [react(), tailwindcss()],
   build: {
-    outDir: path.resolve(__dirname, '../dist-customer'),
+    outDir: path.resolve(PORTAL_DIR, '../dist-customer'),
     emptyOutDir: true,
     sourcemap: false,
   },

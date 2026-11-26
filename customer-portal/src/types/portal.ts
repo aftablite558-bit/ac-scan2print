@@ -6,7 +6,11 @@ export type CustomerRoute =
   | '/quick-print/options'
   | '/quick-print/success'
   | '/quick-print/track'
-  | '/quick-print/help';
+  | '/quick-print/help'
+  | '/quick-print/kiosk'
+  | '/quick-print/photo-sheet'
+  | '/quick-print/exam-prep'
+  | '/quick-print/batch-pack';
 
 export type JobStatus =
   | 'draft'
@@ -33,6 +37,13 @@ export type PrintMode = 'bw' | 'colour';
 export type PrintSides = 'single' | 'duplex';
 export type Orientation = 'auto' | 'portrait' | 'landscape';
 export type ScalingMode = 'fit' | 'actual';
+export type PagesPerSheet = 1 | 2 | 4;
+export type FinishingServiceId =
+  | 'none'
+  | 'staple_corner'
+  | 'spiral_binding'
+  | 'thermal_lamination'
+  | 'heavy_cover_bind';
 export type PricingUnit = 'per_printed_page' | 'per_physical_sheet';
 
 export interface PricingRulePublic {
@@ -137,6 +148,8 @@ export interface PrintPreferencesInput {
   copies: number;
   orientation: Orientation;
   scaling: ScalingMode;
+  pagesPerSheet: PagesPerSheet;
+  finishingService: FinishingServiceId;
   requestedPageRange: string;
   customerName: string;
   customerPhone: string;

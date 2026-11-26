@@ -38,12 +38,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 Name: "{commonappdata}\ACScan2Print"
 Name: "{commonappdata}\ACScan2Print\Logs"
 Name: "{commonappdata}\ACScan2Print\Temp"
+Name: "{commonappdata}\ACScan2Print\Security"
 
 [Files]
 Source: "stage\worker\*"; DestDir: "{app}\worker"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "stage\tray\*"; DestDir: "{app}\tray"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "scripts\health-check.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 Source: "scripts\uninstall-agent.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
+Source: "scripts\register-cleanup-task.ps1"; DestDir: "{app}\scripts"; Flags: ignoreversion
 
 [Icons]
 Name: "{group}\AC Scan2Print Tray"; Filename: "{app}\tray\{#MyTrayExe}"

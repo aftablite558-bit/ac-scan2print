@@ -73,11 +73,13 @@ Copy-Item -Path (Join-Path $StageDir "worker\*") -Destination (Join-Path $Instal
 Copy-Item -Path (Join-Path $StageDir "tray\*") -Destination (Join-Path $InstallDir "tray") -Recurse -Force
 Copy-Item -Path (Join-Path $ScriptDir "health-check.ps1") -Destination (Join-Path $InstallDir "scripts") -Force
 Copy-Item -Path (Join-Path $ScriptDir "uninstall-agent.ps1") -Destination (Join-Path $InstallDir "scripts") -Force
+Copy-Item -Path (Join-Path $ScriptDir "register-cleanup-task.ps1") -Destination (Join-Path $InstallDir "scripts") -Force
 
 # 4. Provision & harden ProgramData directories
 Write-Host "[4/6] Securing ProgramData directories ($ProgramDataDir)..." -ForegroundColor Cyan
 New-Item -ItemType Directory -Path (Join-Path $ProgramDataDir "Logs") -Force | Out-Null
 New-Item -ItemType Directory -Path (Join-Path $ProgramDataDir "Temp") -Force | Out-Null
+New-Item -ItemType Directory -Path (Join-Path $ProgramDataDir "Security") -Force | Out-Null
 & icacls.exe $ProgramDataDir /inheritance:r /grant:r "SYSTEM:(OI)(CI)F" "Administrators:(OI)(CI)F" | Out-Null
 
 # 5. Register Windows Service with DelayedAutoStart + Crash Recovery

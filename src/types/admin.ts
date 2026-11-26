@@ -12,7 +12,19 @@ export type MainRoute =
   | 'settings'
   | 'help';
 
-export type PrintManagementTab = 'jobs' | 'queue' | 'devices' | 'pricing';
+export type PrintManagementTab =
+  | 'overview'
+  | 'jobs'
+  | 'queue'
+  | 'payments'
+  | 'pricing'
+  | 'upi'
+  | 'counter-ops'
+  | 'walkin-pos'
+  | 'shop-tools'
+  | 'batch-archive'
+  | 'pilot'
+  | 'devices';
 
 export type CmsTab =
   | 'business'

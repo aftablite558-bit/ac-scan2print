@@ -115,7 +115,18 @@ export async function invokeProtectedEdgeFunction<T>(
 
   const fetchFn = options.fetchImpl ?? fetch;
   const method = options.method ?? 'POST';
-  const endpoint = `${sbConfig.url.replace(/\/+$/, '')}/functions/v1/${functionName}`;
+  const useLocalProxy =
+    !options.fetchImpl &&
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === '0.0.0.0' ||
+      window.location.hostname.endsWith('.run.app') ||
+      window.location.hostname.endsWith('.googleusercontent.com') ||
+      window.location.hostname.endsWith('.scf.usercontent.goog'));
+  const endpoint = useLocalProxy
+    ? `/api/edge-proxy/${functionName}`
+    : `${sbConfig.url.replace(/\/+$/, '')}/functions/v1/${functionName}`;
 
   const execute = async (token: string): Promise<Response> => {
     const headers: Record<string, string> = {

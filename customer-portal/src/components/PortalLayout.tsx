@@ -1,5 +1,5 @@
 import React from 'react';
-import { HelpCircle, Moon, Printer, Search, Sun } from 'lucide-react';
+import { HelpCircle, Image as ImageIcon, Moon, Printer, Search, Sun, Zap } from 'lucide-react';
 import { usePortal } from '../context/PortalContext';
 import type { CustomerRoute } from '../types/portal';
 import { BrandMark } from './BrandMark';
@@ -10,7 +10,9 @@ interface PortalLayoutProps {
 
 const NAV_ITEMS: Array<{ route: CustomerRoute; label: string; icon: React.ReactNode }> = [
   { route: '/quick-print', label: 'Print', icon: <Printer size={15} /> },
+  { route: '/quick-print/photo-sheet', label: 'Photos', icon: <ImageIcon size={15} /> },
   { route: '/quick-print/track', label: 'Track', icon: <Search size={15} /> },
+  { route: '/quick-print/kiosk', label: 'Kiosk', icon: <Zap size={15} /> },
   { route: '/quick-print/help', label: 'Help', icon: <HelpCircle size={15} /> },
 ];
 
@@ -23,8 +25,12 @@ export const PortalLayout: React.FC<PortalLayoutProps> = ({ children }) => {
         route === '/quick-print' ||
         route === '/quick-print/upload' ||
         route === '/quick-print/options' ||
-        route === '/quick-print/success'
+        route === '/quick-print/success' ||
+        route === '/quick-print/batch-pack'
       );
+    }
+    if (itemRoute === '/quick-print/photo-sheet') {
+      return route === '/quick-print/photo-sheet' || route === '/quick-print/exam-prep';
     }
     return route === itemRoute;
   };
@@ -57,14 +63,14 @@ export const PortalLayout: React.FC<PortalLayoutProps> = ({ children }) => {
                     e.preventDefault();
                     navigate(item.route);
                   }}
-                  className={`min-h-[44px] px-2 sm:px-3 rounded-[10px] text-[12px] sm:text-[13px] font-semibold inline-flex items-center gap-1 sm:gap-1.5 border ${
+                  className={`min-h-[44px] px-1.5 sm:px-3 py-1 sm:py-0 rounded-[10px] text-[10px] sm:text-[13px] font-semibold inline-flex flex-col sm:flex-row items-center justify-center gap-0.5 sm:gap-1.5 border ${
                     active
                       ? 'bg-[var(--ac-cyan-soft)] text-[var(--color-accent)] border-[var(--ac-cyan-border)]'
                       : 'border-transparent text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)]'
                   }`}
                 >
                   {item.icon}
-                  <span>{item.label}</span>
+                  <span className="leading-none sm:leading-normal">{item.label}</span>
                 </a>
               );
             })}
@@ -73,7 +79,7 @@ export const PortalLayout: React.FC<PortalLayoutProps> = ({ children }) => {
               type="button"
               onClick={toggleTheme}
               aria-label={resolvedTheme === 'dark' ? 'Switch to light mode' : 'Switch to dark mode'}
-              className="min-w-[38px] sm:min-w-[44px] min-h-[44px] rounded-[10px] inline-flex items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] cursor-pointer shrink-0"
+              className="min-w-[36px] sm:min-w-[44px] min-h-[44px] rounded-[10px] inline-flex items-center justify-center text-[var(--color-text-secondary)] hover:bg-[var(--color-surface-subtle)] cursor-pointer shrink-0"
             >
               {resolvedTheme === 'dark' ? <Sun size={17} /> : <Moon size={17} />}
             </button>

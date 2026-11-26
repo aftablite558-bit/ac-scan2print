@@ -57,6 +57,12 @@ if ($logExists) {
 }
 Add-CheckResult "Agent Logging ($logDir)" $logExists "Exists=$logExists, TodayErrors=$recentErrors"
 
+# 7. Machine DPAPI Enrollment Credentials (file presence only — zero secret output)
+$secDir = Join-Path $env:ProgramData "ACScan2Print\Security"
+$dpapiFiles = if (Test-Path $secDir) { Get-ChildItem -Path $secDir -Filter "*.dat" -ErrorAction SilentlyContinue } else { @() }
+$dpapiCount = ($dpapiFiles | Measure-Object).Count
+Add-CheckResult "Device DPAPI Credentials ($secDir)" ($dpapiCount -ge 2) "$dpapiCount encrypted .dat file(s) present"
+
 $checks | Format-Table -AutoSize
 $failedCount = ($checks | Where-Object { $_.Status -eq "FAIL" } | Measure-Object).Count
 if ($failedCount -gt 0) {

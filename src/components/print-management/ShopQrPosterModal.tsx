@@ -157,6 +157,7 @@ export const ShopQrPosterModal: React.FC<ShopQrPosterModalProps> = ({
               <img
                 src={qrDataUrl}
                 alt={`QR Code for ${cleanUrl}`}
+                referrerPolicy="no-referrer"
                 className="w-52 h-52 object-contain"
               />
             ) : (

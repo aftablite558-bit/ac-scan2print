@@ -8,6 +8,7 @@ import {
   ChevronRight,
   Clock,
   Copy,
+  Download,
   Edit3,
   ExternalLink,
   FileText,
@@ -35,9 +36,13 @@ import {
   ConfirmActionDialog,
   type ConfirmDialogConfig,
 } from '../components/print-management/ConfirmActionDialog';
+import { BatchArchivePanel } from '../components/print-management/BatchArchivePanel';
+import { CounterOpsPanel } from '../components/print-management/CounterOpsPanel';
 import { PilotLaunchPanel } from '../components/print-management/PilotLaunchPanel';
 import { PrintJobDetailModal } from '../components/print-management/PrintJobDetailModal';
 import { ShopQrPosterModal } from '../components/print-management/ShopQrPosterModal';
+import { ShopToolsPanel } from '../components/print-management/ShopToolsPanel';
+import { WalkinPosPanel } from '../components/print-management/WalkinPosPanel';
 import { useAdmin } from '../context/AdminContext';
 import { dur, gsap, popIcon, reducedMotion, revealCards, revealText } from '../utils/animations';
 import {
@@ -55,6 +60,7 @@ import {
   canAdminReleaseJobToQueue,
   canAdminRetryOrReconcileJob,
   createEmptyPricingRuleDraft,
+  buildJobsLedgerCsv,
   formatCurrencyInr,
   formatDateTime,
   getDeviceStatusMeta,
@@ -63,6 +69,7 @@ import {
   getPaymentStatusMeta,
   isValidUpiHandle,
   pricingRuleToDraft,
+  triggerTextDownload,
   validatePricingRuleDraft,
   type AdminCleanupLog,
   type AdminDeviceSummary,
@@ -77,6 +84,7 @@ import {
   type AdminPrinterSummary,
   type AdminQueueItem,
   type AdminSystemSettings,
+  type DailyFinancialReconciliation,
   type PaperSize,
   type PrintMode,
   type PrintSides,
@@ -88,6 +96,7 @@ interface AdminPrintJobsListResponse {
   jobs?: AdminPrintJobSummary[];
   pagination?: { page: number; pageSize: number; totalItems: number; totalPages: number };
   metrics?: AdminPrintDashboardMetrics;
+  dailyReconciliation?: DailyFinancialReconciliation;
   queue?: AdminQueueItem[];
   paymentVerifications?: AdminPaymentVerificationItem[];
   cashPendingJobs?: AdminPrintJobSummary[];
@@ -99,6 +108,7 @@ interface AdminPrintJobsListResponse {
   systemSettings?: AdminSystemSettings;
   pilotSummary?: AdminPilotSummary;
   recentPilotEvents?: AdminPrintEvent[];
+  recentEvents?: AdminPrintEvent[];
   cleanupLogs?: AdminCleanupLog[];
   serverNowIso?: string;
 }
@@ -126,7 +136,7 @@ const EMPTY_METRICS: AdminPrintDashboardMetrics = {
   pendingVerificationPayments: 0,
 };
 
-type PrintTabId = 'overview' | 'jobs' | 'queue' | 'payments' | 'pricing' | 'upi' | 'pilot' | 'devices';
+type PrintTabId = 'overview' | 'jobs' | 'queue' | 'payments' | 'pricing' | 'upi' | 'counter-ops' | 'walkin-pos' | 'shop-tools' | 'batch-archive' | 'pilot' | 'devices';
 
 export const PrintManagementPage: React.FC = () => {
   const { route, navigate, invokeAdminEdgeFunction, showToast } = useAdmin();
@@ -149,6 +159,12 @@ export const PrintManagementPage: React.FC = () => {
   const [pilotSummary, setPilotSummary] = useState<AdminPilotSummary | null>(null);
   const [recentPilotEvents, setRecentPilotEvents] = useState<AdminPrintEvent[]>([]);
   const [cleanupLogs, setCleanupLogs] = useState<AdminCleanupLog[]>([]);
+  const [dailyReconciliation, setDailyReconciliation] =
+    useState<DailyFinancialReconciliation | null>(null);
+  const [reconciliationDate, setReconciliationDate] = useState<string>(() =>
+    new Date().toISOString().slice(0, 10)
+  );
+  const [exportingCsv, setExportingCsv] = useState(false);
   const [verifyPrinterChoice, setVerifyPrinterChoice] = useState<Record<string, string>>({});
 
   const [loading, setLoading] = useState(true);
@@ -264,6 +280,7 @@ export const PrintManagementPage: React.FC = () => {
     }
     if (res.systemSettings) setSystemSettings(res.systemSettings);
     if (res.pilotSummary) setPilotSummary(res.pilotSummary);
+    if (res.dailyReconciliation) setDailyReconciliation(res.dailyReconciliation);
     setRecentPilotEvents(Array.isArray(res.recentPilotEvents) ? res.recentPilotEvents : []);
     setCleanupLogs(Array.isArray(res.cleanupLogs) ? res.cleanupLogs : []);
 
@@ -300,6 +317,7 @@ export const PrintManagementPage: React.FC = () => {
         paperSize: paperSizeFilter,
         dateFrom: dateFrom || undefined,
         dateTo: dateTo || undefined,
+        reconciliationDate,
         sortOrder,
         page,
         pageSize: 15,
@@ -323,6 +341,7 @@ export const PrintManagementPage: React.FC = () => {
     paymentStatusFilter,
     printModeFilter,
     printSidesFilter,
+    reconciliationDate,
     searchQuery,
     sortOrder,
     statusFilter,
@@ -396,6 +415,39 @@ export const PrintManagementPage: React.FC = () => {
     setDateTo('');
     setSortOrder('desc');
     setPage(1);
+  };
+
+  const handleExportLedgerCsv = async (targetDate?: string) => {
+    if (exportingCsv) return;
+    setExportingCsv(true);
+    try {
+      const fromFilter = targetDate ?? (dateFrom || undefined);
+      const toFilter = targetDate ?? (dateTo || undefined);
+      const res = await invokeAdminEdgeFunction<AdminPrintJobsListResponse>('admin-print-jobs', {
+        action: 'list',
+        search: targetDate ? undefined : searchQuery.trim() || undefined,
+        status: targetDate ? 'all' : statusFilter,
+        paymentMethod: targetDate ? 'all' : paymentMethodFilter,
+        paymentStatus: targetDate ? 'all' : paymentStatusFilter,
+        printMode: targetDate ? 'all' : printModeFilter,
+        printSides: targetDate ? 'all' : printSidesFilter,
+        paperSize: targetDate ? 'all' : paperSizeFilter,
+        dateFrom: fromFilter,
+        dateTo: toFilter,
+        sortOrder: 'desc',
+        page: 1,
+        pageSize: 100,
+      });
+      const rows = Array.isArray(res.jobs) ? res.jobs : [];
+      const csv = buildJobsLedgerCsv(rows);
+      const suffix = targetDate || new Date().toISOString().slice(0, 10);
+      triggerTextDownload(`ac-scan2print-ledger-${suffix}.csv`, csv, 'text/csv;charset=utf-8');
+      showToast(`Exported ${rows.length} job row(s) to CSV ledger.`, 'good');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Unable to export CSV ledger.', 'bad');
+    } finally {
+      setExportingCsv(false);
+    }
   };
 
   const eligiblePrinters = useMemo(() => getEligiblePrinters(printers), [printers]);
@@ -609,6 +661,10 @@ export const PrintManagementPage: React.FC = () => {
           },
           { id: 'pricing', label: 'Pricing Rules', href: '#/print-management/pricing', count: pricingRules.length },
           { id: 'upi', label: 'UPI Settings', href: '#/print-management/upi' },
+          { id: 'counter-ops', label: 'Counter Stock & Cash', href: '#/print-management/counter-ops' },
+          { id: 'walkin-pos', label: 'Walk-In POS & Photo', href: '#/print-management/walkin-pos' },
+          { id: 'shop-tools', label: 'Exam Prep, Wastage & Shift', href: '#/print-management/shop-tools' },
+          { id: 'batch-archive', label: 'Batch & Archive', href: '#/print-management/batch-archive' },
           { id: 'pilot', label: 'Pilot Launch', href: '#/print-management/pilot' },
         ]}
       />
@@ -811,6 +867,34 @@ export const PrintManagementPage: React.FC = () => {
                   >
                     UPI Settings
                   </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('#/print-management/counter-ops')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer"
+                  >
+                    Stock &amp; Cash Tally
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('#/print-management/walkin-pos')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer"
+                  >
+                    Walk-In POS &amp; Photo
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('#/print-management/shop-tools')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer"
+                  >
+                    Exam Prep, Wastage &amp; Shift
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => navigate('#/print-management/batch-archive')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer"
+                  >
+                    Batch Estimator &amp; Archive
+                  </button>
                 </div>
               </div>
             </section>
@@ -989,13 +1073,24 @@ export const PrintManagementPage: React.FC = () => {
                   <option value="asc">Oldest First</option>
                 </select>
 
-                <button
-                  type="button"
-                  onClick={resetFilters}
-                  className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium ml-auto cursor-pointer"
-                >
-                  Reset Filters
-                </button>
+                <div className="flex items-center gap-2 ml-auto">
+                  <button
+                    type="button"
+                    disabled={exportingCsv}
+                    onClick={() => void handleExportLedgerCsv()}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Download size={13} />
+                    <span>{exportingCsv ? 'Exporting...' : 'Export CSV'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetFilters}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
+                  >
+                    Reset Filters
+                  </button>
+                </div>
               </div>
             </section>
 
@@ -1643,6 +1738,100 @@ export const PrintManagementPage: React.FC = () => {
            ================================================================ */}
         {activeTab === 'payments' && (
           <div className="space-y-5">
+            {/* Phase 12 Daily Shift Financial Closeout & Reconciliation */}
+            <section className="glass-pane rounded-[22px] p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h2 className="text-[17px] font-bold flex items-center gap-2">
+                    <IndianRupee size={17} className="text-[var(--good)]" />
+                    <span>Daily Shift Financial Closeout</span>
+                  </h2>
+                  <p className="text-[12.5px] text-[var(--muted)]">
+                    Authoritative server ledger totals across all verified UPI, Counter Cash, pending claims, and completed physical sheets for the selected date.
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <label htmlFor="reconciliation-date-input" className="sr-only">
+                    Reconciliation Date
+                  </label>
+                  <input
+                    id="reconciliation-date-input"
+                    type="date"
+                    value={reconciliationDate}
+                    onChange={(e) => {
+                      if (e.target.value) setReconciliationDate(e.target.value);
+                    }}
+                    className="rounded-[10px] bg-[var(--card-2)] border border-[var(--line)] px-2.5 py-1.5 text-[12.5px]"
+                  />
+                  <button
+                    type="button"
+                    disabled={exportingCsv}
+                    onClick={() => void handleExportLedgerCsv(reconciliationDate)}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <Download size={13} />
+                    <span>{exportingCsv ? 'Exporting...' : 'Export Shift CSV'}</span>
+                  </button>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+                <div className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-1">
+                  <div className="text-[11.5px] font-semibold text-[var(--muted)]">
+                    Confirmed Total ({dailyReconciliation?.dateIso ?? reconciliationDate})
+                  </div>
+                  <div className="text-[20px] font-bold text-[var(--good)] tabular-nums">
+                    {formatCurrencyInr(dailyReconciliation?.confirmedTotalInr ?? 0)}
+                  </div>
+                  <div className="text-[11.5px] text-[var(--muted)] tabular-nums">
+                    {dailyReconciliation?.confirmedPaidCount ?? 0} verified paid txn(s)
+                  </div>
+                </div>
+
+                <div className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-1">
+                  <div className="text-[11.5px] font-semibold text-[var(--muted)]">
+                    UPI vs Cash Drawer Split
+                  </div>
+                  <div className="text-[14px] font-bold tabular-nums">
+                    UPI {formatCurrencyInr(dailyReconciliation?.upiConfirmedInr ?? 0)}
+                  </div>
+                  <div className="text-[13px] font-semibold text-[var(--ink-2)] tabular-nums">
+                    Cash {formatCurrencyInr(dailyReconciliation?.cashConfirmedInr ?? 0)}
+                  </div>
+                </div>
+
+                <div className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-1">
+                  <div className="text-[11.5px] font-semibold text-[var(--muted)]">
+                    Pending & Counter Exposure
+                  </div>
+                  <div className="text-[14px] font-bold text-[var(--warn)] tabular-nums">
+                    {formatCurrencyInr(
+                      (dailyReconciliation?.pendingVerificationInr ?? 0) +
+                        (dailyReconciliation?.unpaidCounterExposureInr ?? 0)
+                    )}
+                  </div>
+                  <div className="text-[11.5px] text-[var(--muted)] tabular-nums">
+                    {dailyReconciliation?.pendingVerificationCount ?? 0} UPI pending ·{' '}
+                    {dailyReconciliation?.unpaidCounterExposureCount ?? 0} cash unpaid
+                  </div>
+                </div>
+
+                <div className="rounded-[14px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-1">
+                  <div className="text-[11.5px] font-semibold text-[var(--muted)]">
+                    Shift Output & Sheets
+                  </div>
+                  <div className="text-[20px] font-bold tabular-nums">
+                    {dailyReconciliation?.completedPhysicalSheets ?? 0} sheets
+                  </div>
+                  <div className="text-[11.5px] text-[var(--muted)] tabular-nums">
+                    {dailyReconciliation?.completedJobsCount ?? 0}/
+                    {dailyReconciliation?.submittedJobsCount ?? 0} completed ·{' '}
+                    {dailyReconciliation?.duplexJobsCount ?? 0} duplex
+                  </div>
+                </div>
+              </div>
+            </section>
+
             {/* Section A: Pending UPI Verifications */}
             <section className="glass-pane rounded-[22px] p-5 space-y-4">
               <div className="flex flex-wrap items-center justify-between gap-3">
@@ -2398,7 +2587,43 @@ export const PrintManagementPage: React.FC = () => {
         )}
 
         {/* ================================================================
-            TAB 7: PHASE 11 CONTROLLED PILOT LAUNCH & READINESS
+            TAB 7: PHASE 18 PAPER STOCK, SHIFT CASH TALLY & CLIENT KHATA
+           ================================================================ */}
+        {activeTab === 'counter-ops' && (
+          <CounterOpsPanel
+            onToast={(msg, tone) => showToast(msg, tone === 'bad' ? 'bad' : 'good')}
+          />
+        )}
+
+        {/* ================================================================
+            TAB 8: PHASE 19 WALK-IN POS, 300-DPI PHOTO STUDIO & PRINTER CARE
+           ================================================================ */}
+        {activeTab === 'walkin-pos' && (
+          <WalkinPosPanel
+            onToast={(msg, tone) => showToast(msg, tone === 'bad' ? 'bad' : 'good')}
+          />
+        )}
+
+        {/* ================================================================
+            TAB 9: PHASE 20 EXAM KB PREP, WASTAGE LOG & DAILY SHIFT CHECKLIST
+           ================================================================ */}
+        {activeTab === 'shop-tools' && (
+          <ShopToolsPanel
+            onToast={(msg, tone) => showToast(msg, tone === 'bad' ? 'bad' : 'good')}
+          />
+        )}
+
+        {/* ================================================================
+            TAB 10: PHASE 21 BULK BATCH ESTIMATOR, TEMPLATES & HISTORY ARCHIVE
+           ================================================================ */}
+        {activeTab === 'batch-archive' && (
+          <BatchArchivePanel
+            onToast={(msg, tone) => showToast(msg, tone === 'bad' ? 'bad' : 'good')}
+          />
+        )}
+
+        {/* ================================================================
+            TAB 8: PHASE 11 CONTROLLED PILOT LAUNCH & READINESS
            ================================================================ */}
         {activeTab === 'pilot' && (
           <PilotLaunchPanel

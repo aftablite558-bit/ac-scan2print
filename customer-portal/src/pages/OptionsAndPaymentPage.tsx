@@ -16,7 +16,13 @@ import {
 import { ErrorAlert } from '../components/LoadingEmptyError';
 import { WorkflowStepper } from '../components/WorkflowStepper';
 import { usePortal } from '../context/PortalContext';
-import { calculateEstimateBreakdown, formatInr } from '../lib/pricing';
+import {
+  FINISHING_ADDONS,
+  NUP_LAYOUT_OPTIONS,
+  calculateEstimateBreakdown,
+  formatInr,
+  getFinishingAddon,
+} from '../lib/pricing';
 import {
   formatFileSize,
   inspectClientFileBytes,
@@ -25,7 +31,14 @@ import {
   validateOptionalPhone,
   validateUtrInput,
 } from '../lib/validation';
-import type { Orientation, PaperSize, PaymentMethod, PrintMode, PrintSides, ScalingMode } from '../types/portal';
+import type {
+  Orientation,
+  PaperSize,
+  PaymentMethod,
+  PrintMode,
+  PrintSides,
+  ScalingMode,
+} from '../types/portal';
 
 export const OptionsAndPaymentPage: React.FC = () => {
   const {
@@ -81,6 +94,8 @@ export const OptionsAndPaymentPage: React.FC = () => {
         paperSize: preferences.paperSize,
         printMode: preferences.printMode,
         printSides: preferences.printSides,
+        pagesPerSheet: preferences.pagesPerSheet,
+        finishingService: preferences.finishingService,
         rules: capabilities?.pricingRules ?? [],
       }),
     [effectivePagesPerCopy, preferences, capabilities]
@@ -449,6 +464,76 @@ export const OptionsAndPaymentPage: React.FC = () => {
               </div>
             </div>
 
+            {/* N-Up Pages Per Sheet (Paper Saver) */}
+            <div className="space-y-2 pt-1">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[13px] font-bold text-[var(--color-text-primary)]">
+                  Pages Per Sheet (Paper Saver)
+                </span>
+                {estimate.sheetsSavedByNup > 0 && (
+                  <span className="text-[12px] font-semibold text-[var(--good)] tabular-nums">
+                    Saves {estimate.sheetsSavedByNup} physical {estimate.sheetsSavedByNup === 1 ? 'sheet' : 'sheets'}
+                  </span>
+                )}
+              </div>
+              <div className="grid grid-cols-3 gap-2" role="radiogroup" aria-label="Pages Per Sheet">
+                {NUP_LAYOUT_OPTIONS.map((opt) => {
+                  const selected = preferences.pagesPerSheet === opt.pagesPerSheet;
+                  return (
+                    <button
+                      key={opt.pagesPerSheet}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => updatePreferences({ pagesPerSheet: opt.pagesPerSheet })}
+                      className={`min-h-[48px] px-2.5 py-2 rounded-[10px] border text-left transition-colors cursor-pointer ${
+                        selected
+                          ? 'bg-[var(--ac-cyan-soft)] border-[var(--ac-cyan)] text-[var(--color-text-primary)]'
+                          : 'bg-[var(--color-surface-subtle)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
+                      }`}
+                    >
+                      <div className="text-[12.5px] font-bold leading-tight">{opt.label}</div>
+                      <div className="text-[11px] text-[var(--color-text-muted)] mt-0.5">{opt.hint}</div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Finishing & Binding Add-On Services */}
+            <div className="space-y-2 pt-1">
+              <span className="block text-[13px] font-bold text-[var(--color-text-primary)]">
+                Finishing &amp; Binding Add-Ons
+              </span>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2" role="radiogroup" aria-label="Finishing Service">
+                {FINISHING_ADDONS.map((addon) => {
+                  const selected = preferences.finishingService === addon.id;
+                  return (
+                    <button
+                      key={addon.id}
+                      type="button"
+                      role="radio"
+                      aria-checked={selected}
+                      onClick={() => updatePreferences({ finishingService: addon.id })}
+                      className={`min-h-[48px] px-3 py-2.5 rounded-[12px] border text-left flex items-center justify-between gap-2 transition-colors cursor-pointer ${
+                        selected
+                          ? 'bg-[var(--ac-cyan-soft)] border-[var(--ac-cyan)] text-[var(--color-text-primary)]'
+                          : 'bg-[var(--color-surface-subtle)] border-[var(--color-border)] text-[var(--color-text-secondary)]'
+                      }`}
+                    >
+                      <div className="min-w-0">
+                        <div className="text-[13px] font-bold truncate">{addon.label}</div>
+                        <div className="text-[11px] text-[var(--color-text-muted)] truncate">{addon.shortDesc}</div>
+                      </div>
+                      <span className="text-[12.5px] font-bold tabular-nums shrink-0 text-[var(--color-text-primary)]">
+                        {addon.rateInr === 0 ? 'Free' : `+₹${addon.rateInr}/cpy`}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             {/* Optional Counter Callout Info */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5 pt-2 border-t border-[var(--color-border)]">
               <div>
@@ -503,15 +588,16 @@ export const OptionsAndPaymentPage: React.FC = () => {
             <dl className="space-y-1.5 text-[13px]">
               <div className="flex justify-between gap-2">
                 <dt className="text-[var(--color-text-muted)]">Configuration</dt>
-                <dd className="font-semibold">
+                <dd className="font-semibold text-right">
                   {preferences.paperSize} · {preferences.printMode === 'bw' ? 'B&W' : 'Colour'} ·{' '}
                   {preferences.printSides === 'duplex' ? 'Double-sided' : 'Single-sided'}
+                  {preferences.pagesPerSheet > 1 ? ` · ${preferences.pagesPerSheet}-in-1` : ''}
                 </dd>
               </div>
               <div className="flex justify-between gap-2">
-                <dt className="text-[var(--color-text-muted)]">Printed Pages × Copies</dt>
+                <dt className="text-[var(--color-text-muted)]">Printed Impressions × Copies</dt>
                 <dd className="font-semibold tabular-nums">
-                  {effectivePagesPerCopy} × {preferences.copies} = {estimate.printedPagesTotal} pages (
+                  {estimate.impressionsPerCopy} × {preferences.copies} = {estimate.printedPagesTotal} sides (
                   {estimate.physicalSheetsTotal} physical sheets)
                 </dd>
               </div>
@@ -523,6 +609,16 @@ export const OptionsAndPaymentPage: React.FC = () => {
                     {estimate.matchedRule.pricingUnit === 'per_physical_sheet'
                       ? 'per sheet'
                       : 'per page'}
+                  </dd>
+                </div>
+              )}
+              {estimate.finishingAmount > 0 && (
+                <div className="flex justify-between gap-2">
+                  <dt className="text-[var(--color-text-muted)]">
+                    Finishing ({estimate.finishingAddon.label} × {preferences.copies})
+                  </dt>
+                  <dd className="font-semibold tabular-nums">
+                    +{formatInr(estimate.finishingAmount)}
                   </dd>
                 </div>
               )}
@@ -767,6 +863,10 @@ export const OptionsAndPaymentPage: React.FC = () => {
                 {preferences.printMode === 'bw' ? 'B&W' : 'Colour'} · {preferences.copies}{' '}
                 {preferences.copies === 1 ? 'copy' : 'copies'} ·{' '}
                 {preferences.printSides === 'duplex' ? 'Double-sided' : 'Single-sided'}
+                {preferences.pagesPerSheet > 1 ? ` · ${preferences.pagesPerSheet}-in-1` : ''}
+                {preferences.finishingService !== 'none'
+                  ? ` · ${getFinishingAddon(preferences.finishingService).label}`
+                  : ''}
               </div>
             </div>
           </section>

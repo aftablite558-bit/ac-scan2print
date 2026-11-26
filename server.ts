@@ -1,4 +1,6 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
+dotenv.config({ path: '.env.local' });
+dotenv.config();
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -9,6 +11,34 @@ import multer from 'multer';
 import * as cheerio from 'cheerio';
 import Parser from 'rss-parser';
 import { GoogleGenAI } from '@google/genai';
+import { runCloudCutoverPreflight } from './scripts/lib/cloudCutoverPreflight.ts';
+import { runLiveCloudSmokeSuite } from './scripts/lib/liveCloudSmoke.ts';
+import { generateMasterArchitectureLedger } from './scripts/lib/masterArchitectureLedger.ts';
+import { generateLiveCommissioningReport } from './scripts/lib/liveCommissioningEngine.ts';
+import {
+  DEFAULT_FLEET_STATIONS,
+  buildGstReturnSummaryCsv,
+  formatThermalReceiptSlip,
+  generateMonthlyGstReport,
+  routeJobToBestStation,
+  type RoutingJobInput,
+} from './scripts/lib/fleetKioskAndGstEngine.ts';
+import {
+  createCounterOpsRouter,
+  initCounterOpsSchema,
+} from './scripts/lib/counterOpsStore.ts';
+import {
+  createWalkinPosRouter,
+  initWalkinPosSchema,
+} from './scripts/lib/walkinPosStore.ts';
+import {
+  createShopFloorToolsRouter,
+  initShopFloorToolsSchema,
+} from './scripts/lib/shopFloorToolsStore.ts';
+import {
+  createBatchArchiveRouter,
+  initBatchArchiveSchema,
+} from './scripts/lib/batchArchiveStore.ts';
 
 const PORT = Number(process.env.PORT) || 3000;
 const IS_PROD = process.env.NODE_ENV === 'production';
@@ -544,6 +574,10 @@ function seedBaselineData(): void {
 }
 
 seedBaselineData();
+initCounterOpsSchema(db);
+initWalkinPosSchema(db);
+initShopFloorToolsSchema(db);
+initBatchArchiveSchema(db);
 
 // --- Auth & Session Helpers ---
 function hashPassword(password: string): string {
@@ -804,6 +838,372 @@ app.use('/uploads', express.static(UPLOADS_DIR));
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'aman-computer-admin', time: nowIso() });
+});
+
+app.get('/api/cutover/preflight', async (req, res) => {
+  try {
+    const skipNetworkProbes = req.query.offline === '1' || req.query.offline === 'true';
+    const report = await runCloudCutoverPreflight({
+      rootDir: ROOT_DIR,
+      skipNetworkProbes,
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'PREFLIGHT_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to execute cutover preflight checks.',
+      },
+    });
+  }
+});
+
+app.get('/api/cloud/smoke', async (req, res) => {
+  try {
+    const target = req.query.target === 'local' ? 'local' : 'production';
+    const report = await runLiveCloudSmokeSuite({ target });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'SMOKE_SUITE_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to execute live cloud smoke checks.',
+      },
+    });
+  }
+});
+
+app.get('/api/master/audit', (_req, res) => {
+  try {
+    const report = generateMasterArchitectureLedger({ rootDir: ROOT_DIR });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'MASTER_AUDIT_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to generate master architecture audit report.',
+      },
+    });
+  }
+});
+
+app.get('/api/commissioning/status', (_req, res) => {
+  try {
+    const report = generateLiveCommissioningReport({ rootDir: ROOT_DIR });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json(report);
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'COMMISSIONING_REPORT_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to generate hardware commissioning report.',
+      },
+    });
+  }
+});
+
+app.get('/api/fleet/summary', (_req, res) => {
+  try {
+    const sampleRouting = [
+      {
+        label: '16-Page B&W Duplex (A4)',
+        decision: routeJobToBestStation({
+          jobNumber: 'JOB-20261125-0042',
+          paperSize: 'A4',
+          printMode: 'bw',
+          printSides: 'duplex',
+          totalPages: 16,
+          copies: 1,
+        }),
+      },
+      {
+        label: '4x6 Colour Photo Glossy',
+        decision: routeJobToBestStation({
+          jobNumber: 'JOB-20261125-0043',
+          paperSize: 'Photo_4x6',
+          printMode: 'colour',
+          printSides: 'single',
+          totalPages: 2,
+          copies: 4,
+        }),
+      },
+      {
+        label: 'Express Kiosk Pickup (3 Pages B&W)',
+        decision: routeJobToBestStation({
+          jobNumber: 'JOB-20261125-0044',
+          paperSize: 'A4',
+          printMode: 'bw',
+          printSides: 'single',
+          totalPages: 3,
+          copies: 1,
+          isKioskPickup: true,
+        }),
+      },
+    ];
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({
+      checkedAtIso: new Date().toISOString(),
+      stations: DEFAULT_FLEET_STATIONS,
+      sampleRouting,
+    });
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'FLEET_SUMMARY_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to retrieve multi-counter fleet status.',
+      },
+    });
+  }
+});
+
+app.post('/api/fleet/route', express.json({ limit: '16kb' }), (req, res) => {
+  try {
+    const body = (req.body && typeof req.body === 'object' ? req.body : {}) as Record<string, unknown>;
+    const printMode = body.printMode === 'colour' ? 'colour' : 'bw';
+    const printSides = body.printSides === 'duplex' ? 'duplex' : 'single';
+    const paperSize = typeof body.paperSize === 'string' && body.paperSize.trim() ? body.paperSize.trim().slice(0, 24) : 'A4';
+    const totalPages = Number.isFinite(Number(body.totalPages)) ? Math.max(1, Math.min(500, Math.round(Number(body.totalPages)))) : 1;
+    const copies = Number.isFinite(Number(body.copies)) ? Math.max(1, Math.min(100, Math.round(Number(body.copies)))) : 1;
+    const jobNumber = typeof body.jobNumber === 'string' && body.jobNumber.trim() ? body.jobNumber.trim().slice(0, 40) : 'JOB-SIM-0001';
+    const isKioskPickup = Boolean(body.isKioskPickup);
+
+    const jobInput: RoutingJobInput = {
+      jobNumber,
+      paperSize,
+      printMode,
+      printSides,
+      totalPages,
+      copies,
+      isKioskPickup,
+    };
+    const decision = routeJobToBestStation(jobInput);
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ jobInput, decision });
+  } catch (err) {
+    res.status(400).json({
+      error: {
+        code: 'FLEET_ROUTE_FAILED',
+        message: err instanceof Error ? err.message : 'Invalid routing request payload.',
+      },
+    });
+  }
+});
+
+app.get('/api/gst/monthly', (req, res) => {
+  try {
+    const rawMonth = typeof req.query.month === 'string' ? req.query.month.trim() : '2026-11';
+    const yearMonth = /^\d{4}-\d{2}$/.test(rawMonth) ? rawMonth : '2026-11';
+    const report = generateMonthlyGstReport(yearMonth);
+    const sampleThermalSlip = formatThermalReceiptSlip({
+      jobNumber: 'JOB-20261125-8821',
+      customerName: 'Walk-in Customer',
+      paperSize: 'A4',
+      printMode: 'bw',
+      printSides: 'duplex',
+      printedPages: 8,
+      copies: 1,
+      physicalSheets: 4,
+      finalAmountInr: 16.0,
+      paymentMethod: 'upi',
+      paymentStatus: 'paid',
+      utrReference: '433019882201',
+      pickupPin: '8821',
+    });
+    res.setHeader('Cache-Control', 'no-store');
+    res.json({ report, sampleThermalSlip });
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'GST_MONTHLY_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to generate monthly GST & P&L report.',
+      },
+    });
+  }
+});
+
+app.get('/api/gst/export', (req, res) => {
+  try {
+    const rawMonth = typeof req.query.month === 'string' ? req.query.month.trim() : '2026-11';
+    const yearMonth = /^\d{4}-\d{2}$/.test(rawMonth) ? rawMonth : '2026-11';
+    const report = generateMonthlyGstReport(yearMonth);
+    const csv = buildGstReturnSummaryCsv(report);
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8');
+    res.setHeader('Content-Disposition', `attachment; filename="aman-computer-gst-hsn9989-${yearMonth}.csv"`);
+    res.setHeader('Cache-Control', 'no-store');
+    res.send(csv);
+  } catch (err) {
+    res.status(500).json({
+      error: {
+        code: 'GST_EXPORT_FAILED',
+        message: err instanceof Error ? err.message : 'Unable to export monthly GST CSV.',
+      },
+    });
+  }
+});
+
+app.use(
+  '/api/counter',
+  createCounterOpsRouter({
+    db,
+    resolveSessionActor: (req) => {
+      const cookies = parseCookies(req.headers.cookie);
+      const raw = cookies[SESSION_COOKIE];
+      if (!raw) return null;
+      const verified = verifySessionToken(raw);
+      if (!verified) return null;
+      const user = loadSessionUserById(verified.uid);
+      if (!user) return null;
+      return { uid: user.id, email: user.email, authSource: 'session' };
+    },
+    firebaseProjectId: (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || 'aman-computer-27b21').trim(),
+    superAdminUid: (process.env.SUPER_ADMIN_FIREBASE_UID || 'Yr0Wr7PuuAdOIMaqohmqaINNbNC2').trim(),
+  })
+);
+
+app.use(
+  '/api/pos',
+  createWalkinPosRouter({
+    db,
+    resolveSessionActor: (req) => {
+      const cookies = parseCookies(req.headers.cookie);
+      const raw = cookies[SESSION_COOKIE];
+      if (!raw) return null;
+      const verified = verifySessionToken(raw);
+      if (!verified) return null;
+      const user = loadSessionUserById(verified.uid);
+      if (!user) return null;
+      return { uid: user.id, email: user.email, authSource: 'session' };
+    },
+    firebaseProjectId: (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || 'aman-computer-27b21').trim(),
+    superAdminUid: (process.env.SUPER_ADMIN_FIREBASE_UID || 'Yr0Wr7PuuAdOIMaqohmqaINNbNC2').trim(),
+  })
+);
+
+app.use(
+  '/api/shop-tools',
+  createShopFloorToolsRouter({
+    db,
+    resolveSessionActor: (req) => {
+      const cookies = parseCookies(req.headers.cookie);
+      const raw = cookies[SESSION_COOKIE];
+      if (!raw) return null;
+      const verified = verifySessionToken(raw);
+      if (!verified) return null;
+      const user = loadSessionUserById(verified.uid);
+      if (!user) return null;
+      return { uid: user.id, email: user.email, authSource: 'session' };
+    },
+    firebaseProjectId: (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || 'aman-computer-27b21').trim(),
+    superAdminUid: (process.env.SUPER_ADMIN_FIREBASE_UID || 'Yr0Wr7PuuAdOIMaqohmqaINNbNC2').trim(),
+  })
+);
+
+app.use(
+  '/api/batch-archive',
+  createBatchArchiveRouter({
+    db,
+    resolveSessionActor: (req) => {
+      const cookies = parseCookies(req.headers.cookie);
+      const raw = cookies[SESSION_COOKIE];
+      if (!raw) return null;
+      const verified = verifySessionToken(raw);
+      if (!verified) return null;
+      const user = loadSessionUserById(verified.uid);
+      if (!user) return null;
+      return { uid: user.id, email: user.email, authSource: 'session' };
+    },
+    firebaseProjectId: (process.env.VITE_FIREBASE_PROJECT_ID || process.env.FIREBASE_PROJECT_ID || 'aman-computer-27b21').trim(),
+    superAdminUid: (process.env.SUPER_ADMIN_FIREBASE_UID || 'Yr0Wr7PuuAdOIMaqohmqaINNbNC2').trim(),
+  })
+);
+
+const ALLOWED_EDGE_PROXY_FUNCTIONS = new Set([
+  'get-portal-capabilities',
+  'get-public-payment-settings',
+  'create-print-job',
+  'create-print-upload-url',
+  'finalize-print-upload',
+  'submit-upi-payment',
+  'get-print-job-status',
+  'admin-bootstrap',
+  'admin-print-jobs',
+  'admin-printers',
+  'admin-review-print-job',
+  'admin-verify-payment',
+  'admin-confirm-cash',
+  'admin-release-print-job',
+  'admin-retry-print-job',
+  'admin-update-pricing',
+  'admin-update-payment-settings',
+  'admin-update-pilot-settings',
+  'admin-manage-devices',
+  'admin-manage-printers',
+  'agent-enroll',
+]);
+
+app.all('/api/edge-proxy/:fnName', async (req, res) => {
+  const fnName = String(req.params.fnName || '').trim();
+  if (!/^[a-z0-9-]+$/.test(fnName) || !ALLOWED_EDGE_PROXY_FUNCTIONS.has(fnName)) {
+    res.status(404).json({ error: { code: 'NOT_FOUND', message: 'Unsupported edge function.' } });
+    return;
+  }
+  if (req.method !== 'GET' && req.method !== 'POST') {
+    res.status(405).json({ error: { code: 'METHOD_NOT_ALLOWED', message: 'Method not allowed.' } });
+    return;
+  }
+
+  const rawSupaUrl = (process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '').trim();
+  if (!rawSupaUrl) {
+    res.status(503).json({
+      error: { code: 'SUPABASE_NOT_CONFIGURED', message: 'Supabase URL is not configured on local server.' },
+    });
+    return;
+  }
+
+  let parsedSupaUrl: URL;
+  try {
+    parsedSupaUrl = new URL(rawSupaUrl);
+    const isLocalHost =
+      parsedSupaUrl.protocol === 'http:' &&
+      (parsedSupaUrl.hostname === 'localhost' || parsedSupaUrl.hostname === '127.0.0.1');
+    if (parsedSupaUrl.protocol !== 'https:' && !isLocalHost) {
+      res.status(400).json({ error: { code: 'INVALID_SUPABASE_URL', message: 'Invalid Supabase URL scheme.' } });
+      return;
+    }
+  } catch {
+    res.status(400).json({ error: { code: 'INVALID_SUPABASE_URL', message: 'Invalid Supabase URL.' } });
+    return;
+  }
+
+  const forwardHeaders: Record<string, string> = {};
+  for (const h of ['authorization', 'apikey', 'content-type', 'x-tracking-token', 'x-draft-secret']) {
+    const val = req.headers[h];
+    if (typeof val === 'string' && val.trim()) {
+      forwardHeaders[h] = val.trim();
+    }
+  }
+
+  try {
+    const upstream = await fetch(`${parsedSupaUrl.origin}/functions/v1/${fnName}`, {
+      method: req.method,
+      headers: forwardHeaders,
+      body: req.method === 'POST' && req.body !== undefined ? JSON.stringify(req.body) : undefined,
+      signal: AbortSignal.timeout(15000),
+    });
+    const text = await upstream.text();
+    const contentType = upstream.headers.get('content-type') || 'application/json; charset=utf-8';
+    res.status(upstream.status).type(contentType).send(text);
+  } catch (err) {
+    res.status(502).json({
+      error: {
+        code: 'UPSTREAM_UNREACHABLE',
+        message: err instanceof Error ? err.message : 'Unable to reach Supabase Edge Function.',
+      },
+    });
+  }
 });
 
 // --- Auth Endpoints ---
@@ -2250,12 +2650,43 @@ app.use((err: Error, req: Request, res: Response, next: NextFunction) => {
 async function startServer(): Promise<void> {
   if (!IS_PROD) {
     const { createServer: createViteServer } = await import('vite');
-    const vite = await createViteServer({
+    const customerVite = await createViteServer({
+      configFile: path.join(ROOT_DIR, 'customer-portal', 'vite.config.ts'),
+      base: '/quick-print/',
+      server: { middlewareMode: true, hmr: false },
+      appType: 'spa',
+    });
+    const adminVite = await createViteServer({
       server: { middlewareMode: true },
       appType: 'spa',
     });
-    app.use(vite.middlewares);
+
+    app.use((req, res, next) => {
+      if (req.path === '/quick-print' || req.path.startsWith('/quick-print/')) {
+        if (req.url === '/quick-print') {
+          req.url = '/quick-print/';
+        }
+        customerVite.middlewares(req, res, next);
+        return;
+      }
+      next();
+    });
+    app.use(adminVite.middlewares);
   } else {
+    const distCustomerDir = path.join(ROOT_DIR, 'dist-customer');
+    const distCustomerIndex = path.join(distCustomerDir, 'index.html');
+    if (fs.existsSync(distCustomerDir) && fs.existsSync(distCustomerIndex)) {
+      const rawCustomerHtml = fs.readFileSync(distCustomerIndex, 'utf8');
+      const mountedCustomerHtml = rawCustomerHtml.replace(
+        /(src|href)="\/(assets\/[^"]+)"/g,
+        '$1="/quick-print/$2"'
+      );
+      app.use('/quick-print', express.static(distCustomerDir, { index: false }));
+      app.get(['/quick-print', '/quick-print/*'], (_req, res) => {
+        res.type('html').send(mountedCustomerHtml);
+      });
+    }
+
     const distDir = path.join(ROOT_DIR, 'dist');
     app.use(express.static(distDir));
     app.get('*', (_req, res) => {
@@ -2264,7 +2695,9 @@ async function startServer(): Promise<void> {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`AMAN COMPUTER Admin Dashboard listening on http://0.0.0.0:${PORT}`);
+    console.log(
+      `AMAN COMPUTER Admin Dashboard & Customer QR Portal (/quick-print) listening on http://0.0.0.0:${PORT}`
+    );
   });
 }
 

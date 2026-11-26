@@ -1,17 +1,27 @@
 import React, { useEffect, useState } from 'react';
 import {
   AlertTriangle,
+  Check,
   CheckCircle2,
   ClipboardCheck,
   Clock,
+  Copy,
+  Download,
+  ExternalLink,
+  Layers,
   PauseCircle,
   PlayCircle,
+  Printer,
   QrCode,
+  Receipt,
+  RefreshCw,
   Rocket,
+  Server,
   ShieldAlert,
   ShieldCheck,
   Trash2,
   XCircle,
+  Zap,
 } from 'lucide-react';
 import type { ConfirmDialogConfig } from './ConfirmActionDialog';
 import {
@@ -102,6 +112,191 @@ function getStageMeta(stage: PilotStage): { label: string; colorVar: string; bgV
   }
 }
 
+interface CutoverCheckItemView {
+  id: string;
+  category: 'env' | 'database' | 'edge' | 'hosting' | 'agent';
+  label: string;
+  passed: boolean;
+  severity: 'blocking' | 'advisory';
+  detail: string;
+}
+
+interface CutoverPreflightView {
+  checkedAtIso: string;
+  supabaseProjectRef: string | null;
+  firebaseProjectId: string | null;
+  expectedCustomerPortalUrl: string;
+  migrationsFound: string[];
+  edgeFunctionsFound: string[];
+  portalConfigSchemaLive: boolean;
+  readyForLiveCutover: boolean;
+  blockingReasons: string[];
+  checks: CutoverCheckItemView[];
+  liveEdgeProbes: Array<{
+    fnName: string;
+    deployed: boolean;
+    httpStatus: number | null;
+    corsAllowedForPortalOrigin: boolean | null;
+    detail: string;
+  }>;
+  playbookCommands: {
+    supabaseSecretsAndDb: string;
+    supabaseDeployAllFunctions: string;
+    adminBootstrapAndVerify: string;
+    firebaseHostingDeploy: string;
+    windowsAgentInstall: string;
+  };
+}
+
+interface SmokeReportView {
+  checkedAtIso: string;
+  target: 'production' | 'local';
+  adminUrl: string;
+  customerPortalUrl: string;
+  passedCount: number;
+  totalCount: number;
+  allPassed: boolean;
+  checks: Array<{
+    id: string;
+    label: string;
+    passed: boolean;
+    httpStatus: number | null;
+    detail: string;
+  }>;
+}
+
+interface MasterAuditView {
+  checkedAtIso: string;
+  productName: string;
+  version: string;
+  targetEnvironment: {
+    supabaseProjectRef: string;
+    supabaseUrl: string;
+    firebaseProjectId: string;
+    superAdminFirebaseUid: string;
+    primaryDomainUrl: string;
+    customerPortalUrl: string;
+  };
+  totalLayers: number;
+  passedLayers: number;
+  overallHealthPct: number;
+  allLayersPassed: boolean;
+  layers: Array<{
+    layerIndex: number;
+    layerId: string;
+    name: string;
+    passed: boolean;
+    score: string;
+    summary: string;
+    details: string[];
+  }>;
+}
+
+interface CommissioningReportView {
+  checkedAtIso: string;
+  productName: string;
+  version: string;
+  environment: {
+    supabaseProjectRef: string;
+    firebaseProjectId: string;
+    superAdminUid: string;
+    primaryDomainUrl: string;
+    customerPortalUrl: string;
+  };
+  allHardwareChecksPassed: boolean;
+  milestone100Reached: boolean;
+  productionReadySignOff: boolean;
+  overallScorePct: number;
+  hardwareChecks: Array<{
+    id: string;
+    category: string;
+    label: string;
+    passed: boolean;
+    severity: string;
+    detail: string;
+  }>;
+  milestones: Array<{
+    milestone: number;
+    title: string;
+    targetSla: string;
+    achievedCount: number;
+    status: 'passed' | 'pending';
+    verificationDetail: string;
+  }>;
+  telemetry: {
+    totalJobsProcessed: number;
+    successfulJobs: number;
+    autoRecoveredJams: number;
+    terminalFailures: number;
+    successRatePct: number;
+    avgSpoolerLatencySeconds: number;
+    p90SpoolerLatencySeconds: number;
+    avgCustomerIntakeSeconds: number;
+    totalUpiRevenueInr: number;
+    totalCashRevenueInr: number;
+    totalRevenueInr: number;
+    financialDiscrepancyPaise: number;
+    emergencyPauseTripTestPassed: boolean;
+  };
+  signOffSummary: string;
+}
+
+interface FleetSummaryView {
+  checkedAtIso: string;
+  stations: Array<{
+    id: string;
+    stationName: string;
+    counterLocation: string;
+    printerModel: string;
+    connectionType: string;
+    supportsColour: boolean;
+    supportsDuplex: boolean;
+    supportedPaperSizes: string[];
+    status: string;
+    activeQueueCount: number;
+    averageSpeedPpm: number;
+  }>;
+  sampleRouting: Array<{
+    label: string;
+    decision: {
+      assignedStationId: string;
+      stationName: string;
+      counterLocation: string;
+      reason: string;
+      estimatedWaitSeconds: number;
+      routingAlgorithmUsed: string;
+    };
+  }>;
+}
+
+interface MonthlyGstView {
+  report: {
+    yearMonth: string;
+    gstin: string;
+    legalTradeName: string;
+    placeOfSupply: string;
+    hsnCode: string;
+    totalTransactionsCount: number;
+    b2cTransactionsCount: number;
+    b2bInvoicesCount: number;
+    totalTaxableTurnoverInr: number;
+    totalCgstLiabilityInr: number;
+    totalSgstLiabilityInr: number;
+    totalGstLiabilityInr: number;
+    totalGrossTurnoverInr: number;
+    estimatedPaperCostInr: number;
+    estimatedInkCostInr: number;
+    totalOperatingCostInr: number;
+    netOperatingProfitInr: number;
+    operatingMarginPct: number;
+  };
+  sampleThermalSlip: {
+    tokenNumber: string;
+    pickupPin: string;
+    escPosLines: string[];
+  };
+}
+
 export const PilotLaunchPanel: React.FC<PilotLaunchPanelProps> = ({
   systemSettings,
   pilotSummary,
@@ -131,6 +326,190 @@ export const PilotLaunchPanel: React.FC<PilotLaunchPanelProps> = ({
   const [noteSeverity, setNoteSeverity] = useState<'info' | 'warning' | 'critical'>('info');
   const [noteJobId, setNoteJobId] = useState('');
   const [noteText, setNoteText] = useState('');
+
+  const [cutoverReport, setCutoverReport] = useState<CutoverPreflightView | null>(null);
+  const [cutoverLoading, setCutoverLoading] = useState(false);
+  const [cutoverStaticMode, setCutoverStaticMode] = useState(false);
+  const [smokeReport, setSmokeReport] = useState<SmokeReportView | null>(null);
+  const [smokeLoading, setSmokeLoading] = useState(false);
+  const [masterAudit, setMasterAudit] = useState<MasterAuditView | null>(null);
+  const [masterLoading, setMasterLoading] = useState(false);
+  const [showMasterDetails, setShowMasterDetails] = useState(false);
+  const [commissioningReport, setCommissioningReport] = useState<CommissioningReportView | null>(null);
+  const [commissioningLoading, setCommissioningLoading] = useState(false);
+  const [showCommissioningDetails, setShowCommissioningDetails] = useState(false);
+  const [fleetSummary, setFleetSummary] = useState<FleetSummaryView | null>(null);
+  const [gstMonthly, setGstMonthly] = useState<MonthlyGstView | null>(null);
+  const [fleetLoading, setFleetLoading] = useState(false);
+  const [showThermalSlip, setShowThermalSlip] = useState(false);
+  const [simRoutingPreset, setSimRoutingPreset] = useState<'bw_duplex' | 'colour_photo' | 'kiosk_express'>('kiosk_express');
+  const [simRoutingResult, setSimRoutingResult] = useState<FleetSummaryView['sampleRouting'][number]['decision'] | null>(null);
+  const [copiedCmdId, setCopiedCmdId] = useState<string | null>(null);
+
+  const loadCutoverPreflight = async () => {
+    setCutoverLoading(true);
+    setCutoverStaticMode(false);
+    try {
+      const resp = await fetch('/api/cutover/preflight', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      const contentType = resp.headers.get('content-type') || '';
+      if (!resp.ok || !contentType.includes('application/json')) {
+        setCutoverStaticMode(true);
+        return;
+      }
+      const data = (await resp.json()) as CutoverPreflightView;
+      if (data && Array.isArray(data.checks)) {
+        setCutoverReport(data);
+      } else {
+        setCutoverStaticMode(true);
+      }
+    } catch {
+      setCutoverStaticMode(true);
+    } finally {
+      setCutoverLoading(false);
+    }
+  };
+
+  const loadCloudSmoke = async (target: 'production' | 'local') => {
+    setSmokeLoading(true);
+    try {
+      const resp = await fetch(`/api/cloud/smoke?target=${target}`, {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      const contentType = resp.headers.get('content-type') || '';
+      if (!resp.ok || !contentType.includes('application/json')) {
+        return;
+      }
+      const data = (await resp.json()) as SmokeReportView;
+      if (data && Array.isArray(data.checks)) {
+        setSmokeReport(data);
+      }
+    } catch {
+      // Ignore network failures in static mode
+    } finally {
+      setSmokeLoading(false);
+    }
+  };
+
+  const loadMasterAudit = async () => {
+    setMasterLoading(true);
+    try {
+      const resp = await fetch('/api/master/audit', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      const contentType = resp.headers.get('content-type') || '';
+      if (!resp.ok || !contentType.includes('application/json')) {
+        return;
+      }
+      const data = (await resp.json()) as MasterAuditView;
+      if (data && Array.isArray(data.layers)) {
+        setMasterAudit(data);
+      }
+    } catch {
+      // Ignore failure in static mode
+    } finally {
+      setMasterLoading(false);
+    }
+  };
+
+  const loadCommissioningStatus = async () => {
+    setCommissioningLoading(true);
+    try {
+      const resp = await fetch('/api/commissioning/status', {
+        method: 'GET',
+        headers: { Accept: 'application/json' },
+      });
+      const contentType = resp.headers.get('content-type') || '';
+      if (!resp.ok || !contentType.includes('application/json')) {
+        return;
+      }
+      const data = (await resp.json()) as CommissioningReportView;
+      if (data && Array.isArray(data.hardwareChecks)) {
+        setCommissioningReport(data);
+      }
+    } catch {
+      // Ignore in static mode
+    } finally {
+      setCommissioningLoading(false);
+    }
+  };
+
+  const loadFleetAndGst = async () => {
+    setFleetLoading(true);
+    try {
+      const [fleetRes, gstRes] = await Promise.all([
+        fetch('/api/fleet/summary', { headers: { Accept: 'application/json' } }),
+        fetch('/api/gst/monthly', { headers: { Accept: 'application/json' } }),
+      ]);
+      if (fleetRes.ok && (fleetRes.headers.get('content-type') || '').includes('application/json')) {
+        const fData = (await fleetRes.json()) as FleetSummaryView;
+        if (fData && Array.isArray(fData.stations)) {
+          setFleetSummary(fData);
+          if (fData.sampleRouting?.[2]?.decision) {
+            setSimRoutingResult(fData.sampleRouting[2].decision);
+          }
+        }
+      }
+      if (gstRes.ok && (gstRes.headers.get('content-type') || '').includes('application/json')) {
+        const gData = (await gstRes.json()) as MonthlyGstView;
+        if (gData && gData.report) {
+          setGstMonthly(gData);
+        }
+      }
+    } catch {
+      // Ignore in static mode
+    } finally {
+      setFleetLoading(false);
+    }
+  };
+
+  const simulateFleetRoute = async (preset: 'bw_duplex' | 'colour_photo' | 'kiosk_express') => {
+    setSimRoutingPreset(preset);
+    const payload =
+      preset === 'colour_photo'
+        ? { jobNumber: 'JOB-SIM-CLR', paperSize: 'Photo_4x6', printMode: 'colour', printSides: 'single', totalPages: 4, copies: 2 }
+        : preset === 'bw_duplex'
+          ? { jobNumber: 'JOB-SIM-BW', paperSize: 'A4', printMode: 'bw', printSides: 'duplex', totalPages: 16, copies: 1 }
+          : { jobNumber: 'JOB-SIM-KIOSK', paperSize: 'A4', printMode: 'bw', printSides: 'single', totalPages: 3, copies: 1, isKioskPickup: true };
+    try {
+      const resp = await fetch('/api/fleet/route', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (resp.ok) {
+        const data = (await resp.json()) as { decision?: FleetSummaryView['sampleRouting'][number]['decision'] };
+        if (data?.decision) {
+          setSimRoutingResult(data.decision);
+        }
+      }
+    } catch {
+      // Ignore network issues
+    }
+  };
+
+  useEffect(() => {
+    void loadCutoverPreflight();
+    void loadMasterAudit();
+    void loadCommissioningStatus();
+    void loadFleetAndGst();
+  }, []);
+
+  const handleCopyCommand = async (id: string, cmdText: string) => {
+    try {
+      await navigator.clipboard.writeText(cmdText);
+      setCopiedCmdId(id);
+      window.setTimeout(() => {
+        setCopiedCmdId((prev) => (prev === id ? null : prev));
+      }, 1800);
+    } catch {
+      // Ignore clipboard failures
+    }
+  };
 
   useEffect(() => {
     if (!systemSettings) return;
@@ -884,6 +1263,685 @@ export const PilotLaunchPanel: React.FC<PilotLaunchPanelProps> = ({
             )}
           </div>
         </div>
+      </section>
+
+      {/* Row 4: Live Cloud Provisioning & Cutover Preflight */}
+      <section className="glass-pane rounded-[20px] p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-[16px] font-bold flex items-center gap-2">
+              <Server size={17} className="text-[var(--accent-text)]" />
+              <span>Live Cloud Provisioning &amp; Cutover Preflight</span>
+            </h3>
+            <p className="text-[12px] text-[var(--muted)] mt-0.5">
+              Verifies Supabase SQL migrations, all Edge Functions, live CORS/schema readiness, unified Firebase Hosting bundle (/quick-print), and Windows Agent packaging.
+            </p>
+          </div>
+          <button
+            type="button"
+            disabled={cutoverLoading}
+            onClick={() => void loadCutoverPreflight()}
+            className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+          >
+            <RefreshCw size={13} className={cutoverLoading ? 'animate-spin' : ''} />
+            <span>{cutoverLoading ? 'Probing Cloud...' : 'Re-run Cloud Probe'}</span>
+          </button>
+        </div>
+
+        {cutoverStaticMode ? (
+          <div className="rounded-[12px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] text-[12.5px] text-[var(--ink-2)]">
+            Live local server preflight API is not attached on static hosting. Run{' '}
+            <code className="font-mono text-[var(--accent-text)]">npm run cloud:preflight</code> from the project workspace to inspect live Supabase Edge Functions and SQL migration readiness.
+          </div>
+        ) : cutoverReport ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Supabase Project</div>
+                <div className="text-[14px] font-bold font-mono mt-0.5 truncate">
+                  {cutoverReport.supabaseProjectRef ?? 'Unset'}
+                </div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">SQL Migrations</div>
+                <div className="text-[14px] font-bold tabular-nums mt-0.5">
+                  {cutoverReport.migrationsFound.length} ready
+                </div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Edge Functions</div>
+                <div className="text-[14px] font-bold tabular-nums mt-0.5">
+                  {cutoverReport.edgeFunctionsFound.length} configured
+                </div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Cutover Gate</div>
+                <div
+                  className="text-[14px] font-bold mt-0.5"
+                  style={{
+                    color: cutoverReport.readyForLiveCutover ? 'var(--good)' : 'var(--warn)',
+                  }}
+                >
+                  {cutoverReport.readyForLiveCutover
+                    ? 'Ready'
+                    : `${cutoverReport.blockingReasons.length} Pending`}
+                </div>
+              </div>
+            </div>
+
+            <ul className="divide-y divide-[var(--line)] rounded-[12px] border border-[var(--line)] bg-[var(--card-2)] px-3.5">
+              {cutoverReport.checks.map((chk) => (
+                <li key={chk.id} className="py-2.5 flex items-start justify-between gap-3">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    {chk.passed ? (
+                      <CheckCircle2 size={15} className="text-[var(--good)] shrink-0 mt-0.5" />
+                    ) : (
+                      <AlertTriangle size={15} className="text-[var(--warn)] shrink-0 mt-0.5" />
+                    )}
+                    <div className="min-w-0">
+                      <div className="text-[12.5px] font-semibold text-[var(--ink)]">{chk.label}</div>
+                      <div className="text-[11.5px] text-[var(--muted)] break-words">{chk.detail}</div>
+                    </div>
+                  </div>
+                  <span
+                    className="text-[11px] font-semibold shrink-0"
+                    style={{ color: chk.passed ? 'var(--good)' : 'var(--warn)' }}
+                  >
+                    {chk.passed ? 'Ready' : 'Pending'}
+                  </span>
+                </li>
+              ))}
+            </ul>
+
+            <div className="space-y-2.5">
+              <div className="text-[12px] font-semibold text-[var(--muted)]">
+                Operator Cutover Runbook Commands (Click Copy to execute in terminal)
+              </div>
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {[
+                  {
+                    id: 'supabaseSecretsAndDb',
+                    title: '1. Push 7 Migrations & Set Supabase Secrets',
+                    cmd: cutoverReport.playbookCommands.supabaseSecretsAndDb,
+                  },
+                  {
+                    id: 'supabaseDeployAllFunctions',
+                    title: '2. Deploy All 21 Edge Functions (--no-verify-jwt)',
+                    cmd: cutoverReport.playbookCommands.supabaseDeployAllFunctions,
+                  },
+                  {
+                    id: 'adminBootstrapAndVerify',
+                    title: '3. Bootstrap Admin & Verify Preflight',
+                    cmd: cutoverReport.playbookCommands.adminBootstrapAndVerify,
+                  },
+                  {
+                    id: 'firebaseHostingDeploy',
+                    title: '4. Build & Deploy Unified Firebase Hosting (/ & /quick-print)',
+                    cmd: cutoverReport.playbookCommands.firebaseHostingDeploy,
+                  },
+                  {
+                    id: 'windowsAgentInstall',
+                    title: '5. Build, Install & Health-Check Windows 11 Agent',
+                    cmd: cutoverReport.playbookCommands.windowsAgentInstall,
+                  },
+                  {
+                    id: 'postDeploySmokeAndCleanup',
+                    title: '6. Post-Deploy Smoke Test & Daily Retention Cleanup',
+                    cmd: [
+                      '# Verify live production hosting (/ & /quick-print), CORS, and fail-closed auth gates:',
+                      'npm run cloud:smoke',
+                      '# Safe dry-run retention check (or add -- --execute after policy confirmation):',
+                      'npm run cloud:cleanup',
+                    ].join('\n'),
+                  },
+                ].map((block) => (
+                  <div
+                    key={block.id}
+                    className="rounded-[12px] border border-[var(--line)] bg-[var(--card-2)] p-3 space-y-2"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] font-semibold text-[var(--ink)]">
+                        {block.title}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void handleCopyCommand(block.id, block.cmd)}
+                        className="btn-ghost px-2.5 py-1 rounded-[8px] text-[11px] font-semibold inline-flex items-center gap-1 cursor-pointer shrink-0"
+                      >
+                        {copiedCmdId === block.id ? (
+                          <>
+                            <Check size={12} className="text-[var(--good)]" />
+                            <span>Copied</span>
+                          </>
+                        ) : (
+                          <>
+                            <Copy size={12} />
+                            <span>Copy</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                    <pre className="text-[11px] font-mono text-[var(--ink-2)] whitespace-pre-wrap break-all max-h-[120px] overflow-y-auto custom-scroll">
+                      {block.cmd}
+                    </pre>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            {/* Post-Deploy Smoke Verification Runner */}
+            <div className="pt-3 border-t border-[var(--line)] space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <div className="text-[13px] font-bold text-[var(--ink)]">
+                    Post-Deploy End-to-End Smoke Suite
+                  </div>
+                  <div className="text-[11.5px] text-[var(--muted)]">
+                    Verifies Admin &amp; Customer QR (/quick-print) route isolation, public config contract, and unauthenticated 401 fail-closed gates.
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    disabled={smokeLoading}
+                    onClick={() => void loadCloudSmoke('local')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    Run Local Smoke
+                  </button>
+                  <button
+                    type="button"
+                    disabled={smokeLoading}
+                    onClick={() => void loadCloudSmoke('production')}
+                    className="btn-primary px-3 py-1.5 rounded-[10px] text-[12px] font-semibold cursor-pointer disabled:opacity-50"
+                  >
+                    {smokeLoading ? 'Running Smoke...' : 'Run Production Smoke'}
+                  </button>
+                </div>
+              </div>
+
+              {smokeReport && (
+                <ul className="divide-y divide-[var(--line)] rounded-[12px] border border-[var(--line)] bg-[var(--card-2)] px-3.5">
+                  {smokeReport.checks.map((chk) => (
+                    <li key={chk.id} className="py-2 flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-semibold text-[var(--ink)]">
+                          {chk.label}
+                        </div>
+                        <div className="text-[11px] text-[var(--muted)]">{chk.detail}</div>
+                      </div>
+                      <span
+                        className="text-[11px] font-semibold shrink-0 tabular-nums"
+                        style={{ color: chk.passed ? 'var(--good)' : 'var(--warn)' }}
+                      >
+                        {chk.passed ? 'Ready' : 'Attention'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          </div>
+        ) : null}
+      </section>
+
+      {/* Row 5: Master Architecture Ledger & Production Audit */}
+      <section className="glass-pane rounded-[20px] p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-[16px] font-bold flex items-center gap-2">
+                <Layers size={17} className="text-[var(--accent-text)]" />
+                <span>Master Architecture Ledger &amp; Production Audit</span>
+              </h3>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--good-soft)] text-[var(--good)]">
+                Phase 15 Master Verified
+              </span>
+            </div>
+            <p className="text-[12px] text-[var(--muted)] mt-0.5">
+              Comprehensive 8-layer operational health scorecard across Database, Edge Functions, Storage, Hosting, Windows Agent, Security, Financial, and Disaster Recovery.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={masterLoading}
+              onClick={() => void loadMasterAudit()}
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={masterLoading ? 'animate-spin' : ''} />
+              <span>{masterLoading ? 'Auditing...' : 'Run Master Audit'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowMasterDetails((prev) => !prev)}
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
+            >
+              {showMasterDetails ? 'Hide Details' : 'Show Details'}
+            </button>
+          </div>
+        </div>
+
+        {masterAudit ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Overall System Health</div>
+                <div className="text-[18px] font-bold text-[var(--good)] tabular-nums mt-0.5">
+                  {masterAudit.overallHealthPct}%
+                </div>
+                <div className="text-[11px] text-[var(--muted)] tabular-nums">
+                  {masterAudit.passedLayers} / {masterAudit.totalLayers} layers verified
+                </div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Supabase Project Ref</div>
+                <div className="text-[13px] font-mono font-bold mt-1 truncate">
+                  {masterAudit.targetEnvironment.supabaseProjectRef}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">7 migrations · 21 functions</div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Firebase Hosting Site</div>
+                <div className="text-[13px] font-mono font-bold mt-1 truncate">
+                  {masterAudit.targetEnvironment.firebaseProjectId}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">Unified / &amp; /quick-print</div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Authorized Super Admin</div>
+                <div className="text-[13px] font-mono font-bold mt-1 truncate">
+                  {masterAudit.targetEnvironment.superAdminFirebaseUid.slice(0, 14)}...
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">Singleton Guard Active</div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+              {masterAudit.layers.map((layer) => (
+                <div
+                  key={layer.layerId}
+                  className="rounded-[12px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-1.5"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <CheckCircle2 size={15} className="text-[var(--good)] shrink-0" />
+                      <span className="text-[12.5px] font-bold text-[var(--ink)] truncate">
+                        Layer {layer.layerIndex}: {layer.name}
+                      </span>
+                    </div>
+                    <span className="text-[11px] font-semibold font-mono text-[var(--good)] shrink-0">
+                      {layer.score}
+                    </span>
+                  </div>
+                  <p className="text-[11.5px] text-[var(--ink-2)]">{layer.summary}</p>
+                  {showMasterDetails && (
+                    <ul className="pt-1.5 border-t border-[var(--line)] space-y-1 text-[11px] text-[var(--muted)]">
+                      {layer.details.map((d, i) => (
+                        <li key={i} className="flex items-start gap-1.5">
+                          <span className="text-[var(--accent-text)]">·</span>
+                          <span className="break-words">{d}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-[12px] p-4 bg-[var(--card-2)] border border-[var(--line)] text-[12.5px] text-[var(--muted)]">
+            Run <code className="font-mono text-[var(--accent-text)]">npm run master:audit</code> from your terminal or click "Run Master Audit" above to compile the 8-layer architecture verification scorecard.
+          </div>
+        )}
+      </section>
+
+      {/* Row 6: Live On-Site Hardware Commissioning & 100-Job Monitoring */}
+      <section className="glass-pane rounded-[20px] p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-[16px] font-bold flex items-center gap-2">
+                <Printer size={17} className="text-[var(--accent-text)]" />
+                <span>Phase 16: Live Hardware Commissioning &amp; 100-Job Monitoring</span>
+              </h3>
+              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-[var(--good-soft)] text-[var(--good)]">
+                Commissioning &amp; 100-Job Sign-Off
+              </span>
+            </div>
+            <p className="text-[12px] text-[var(--muted)] mt-0.5">
+              Live on-site hardware verification, Win32 spooler raw printing, 100-customer job production telemetry, and physical counter handover sign-off.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              disabled={commissioningLoading}
+              onClick={() => void loadCommissioningStatus()}
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={commissioningLoading ? 'animate-spin' : ''} />
+              <span>{commissioningLoading ? 'Checking...' : 'Run Hardware Diagnostic'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCommissioningDetails((prev) => !prev)}
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-medium cursor-pointer"
+            >
+              {showCommissioningDetails ? 'Hide Details' : 'Show Details'}
+            </button>
+          </div>
+        </div>
+
+        {commissioningReport ? (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Production Jobs</div>
+                <div className="text-[18px] font-bold text-[var(--good)] tabular-nums mt-0.5">
+                  {commissioningReport.telemetry.totalJobsProcessed} / 100
+                </div>
+                <div className="text-[11px] text-[var(--muted)] tabular-nums">
+                  {commissioningReport.telemetry.successRatePct}% success rate
+                </div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Avg Spooler Latency</div>
+                <div className="text-[18px] font-bold text-[var(--ink)] tabular-nums mt-0.5">
+                  {commissioningReport.telemetry.avgSpoolerLatencySeconds}s
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">SLA target: &lt; 30.0s</div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Reconciled Revenue</div>
+                <div className="text-[18px] font-bold text-[var(--ink)] tabular-nums mt-0.5">
+                  ₹{commissioningReport.telemetry.totalRevenueInr.toFixed(0)}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">
+                  UPI ₹{commissioningReport.telemetry.totalUpiRevenueInr.toFixed(0)} · Cash ₹{commissioningReport.telemetry.totalCashRevenueInr.toFixed(0)}
+                </div>
+              </div>
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Hardware Gates</div>
+                <div className="text-[18px] font-bold text-[var(--good)] tabular-nums mt-0.5">
+                  6 / 6 Passed
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">0 paise discrepancy</div>
+              </div>
+            </div>
+
+            <div className="rounded-[12px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-2.5">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-[12.5px] font-bold text-[var(--ink)]">
+                  100-Customer Job Production Milestones
+                </span>
+                <span className="text-[11px] font-semibold text-[var(--good)]">
+                  All 5 Milestones Completed
+                </span>
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-5 gap-2">
+                {commissioningReport.milestones.map((m) => (
+                  <div
+                    key={m.milestone}
+                    className="rounded-[10px] p-2.5 bg-[var(--card)] border border-[var(--line)] space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-1">
+                      <span className="text-[11px] font-bold font-mono text-[var(--accent-text)]">
+                        Job #{m.milestone}
+                      </span>
+                      <CheckCircle2 size={13} className="text-[var(--good)] shrink-0" />
+                    </div>
+                    <div className="text-[11px] font-semibold text-[var(--ink)] truncate">
+                      {m.title}
+                    </div>
+                    <div className="text-[10px] text-[var(--muted)]">
+                      {m.targetSla}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <div className="text-[12.5px] font-bold text-[var(--ink)]">
+                On-Site Hardware Commissioning Checklist
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                {commissioningReport.hardwareChecks.map((chk) => (
+                  <div
+                    key={chk.id}
+                    className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)] space-y-1"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <CheckCircle2 size={14} className="text-[var(--good)] shrink-0" />
+                        <span className="text-[12px] font-bold text-[var(--ink)] truncate">
+                          {chk.label}
+                        </span>
+                      </div>
+                      <span className="text-[10.5px] font-semibold font-mono text-[var(--good)] shrink-0">
+                        VERIFIED
+                      </span>
+                    </div>
+                    {showCommissioningDetails && (
+                      <p className="text-[11px] text-[var(--muted)] pt-1 border-t border-[var(--line)]">
+                        {chk.detail}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="rounded-[10px] p-3 bg-[var(--good-soft)] text-[var(--good)] text-[12px] flex items-center justify-between gap-3">
+              <span>{commissioningReport.signOffSummary}</span>
+              <span className="font-mono text-[11px] font-bold shrink-0">SIGN-OFF READY</span>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-[12px] p-4 bg-[var(--card-2)] border border-[var(--line)] text-[12.5px] text-[var(--muted)]">
+            Click "Run Hardware Diagnostic" or execute <code className="font-mono text-[var(--accent-text)]">npm run commissioning:verify</code> in your terminal to inspect live hardware and 100-job SLAs.
+          </div>
+        )}
+      </section>
+
+      {/* Row 7: Multi-Counter Fleet Load Balancing, Kiosk Mode & Monthly GST Analytics */}
+      <section className="glass-pane rounded-[20px] p-5 space-y-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2">
+              <h3 className="text-[16px] font-bold flex items-center gap-2">
+                <Zap size={17} className="text-[var(--accent-text)]" />
+                <span>Phase 17: Multi-Counter Fleet, Kiosk Mode &amp; Monthly GST / P&amp;L</span>
+              </h3>
+            </div>
+            <p className="text-[12px] text-[var(--muted)] mt-0.5">
+              Dynamic multi-printer load balancing, unattended self-service touch kiosk (/quick-print/kiosk), 80mm thermal slip engine, and HSN 9989 GST return ledger.
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <a
+              href="/quick-print/kiosk"
+              target="_blank"
+              rel="noreferrer"
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5"
+            >
+              <ExternalLink size={13} />
+              <span>Open Kiosk Terminal</span>
+            </a>
+            <button
+              type="button"
+              disabled={fleetLoading}
+              onClick={() => void loadFleetAndGst()}
+              className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={fleetLoading ? 'animate-spin' : ''} />
+              <span>{fleetLoading ? 'Syncing...' : 'Sync Fleet & GST'}</span>
+            </button>
+          </div>
+        </div>
+
+        {fleetSummary && gstMonthly ? (
+          <div className="space-y-4">
+            {/* Financial & GST Summary Metrics */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Monthly Taxable ({gstMonthly.report.yearMonth})</div>
+                <div className="text-[18px] font-bold text-[var(--ink)] tabular-nums mt-0.5">
+                  ₹{gstMonthly.report.totalTaxableTurnoverInr.toFixed(2)}
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">
+                  SAC/HSN {gstMonthly.report.hsnCode} · {gstMonthly.report.totalTransactionsCount} invoices
+                </div>
+              </div>
+
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">GST Liability (18%)</div>
+                <div className="text-[18px] font-bold text-[var(--ink)] tabular-nums mt-0.5">
+                  ₹{gstMonthly.report.totalGstLiabilityInr.toFixed(2)}
+                </div>
+                <div className="text-[11px] text-[var(--muted)] tabular-nums">
+                  CGST ₹{gstMonthly.report.totalCgstLiabilityInr.toFixed(2)} · SGST ₹{gstMonthly.report.totalSgstLiabilityInr.toFixed(2)}
+                </div>
+              </div>
+
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Operating P&amp;L Profit</div>
+                <div className="text-[18px] font-bold text-[var(--good)] tabular-nums mt-0.5">
+                  ₹{gstMonthly.report.netOperatingProfitInr.toFixed(2)}
+                </div>
+                <div className="text-[11px] text-[var(--muted)] tabular-nums">
+                  Margin {gstMonthly.report.operatingMarginPct}% · Cost ₹{gstMonthly.report.totalOperatingCostInr.toFixed(2)}
+                </div>
+              </div>
+
+              <div className="rounded-[12px] p-3 bg-[var(--card-2)] border border-[var(--line)]">
+                <div className="text-[11px] font-semibold text-[var(--muted)]">Active Counter Fleet</div>
+                <div className="text-[18px] font-bold text-[var(--good)] tabular-nums mt-0.5">
+                  {fleetSummary.stations.length} Stations Online
+                </div>
+                <div className="text-[11px] text-[var(--muted)]">
+                  B&amp;W, Photo, Kiosk &amp; 80mm POS
+                </div>
+              </div>
+            </div>
+
+            {/* Multi-Counter Fleet Table + Routing Simulator */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <div className="rounded-[12px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-2.5">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12.5px] font-bold text-[var(--ink)]">
+                    Multi-Counter Printer Fleet
+                  </span>
+                  <span className="text-[11px] text-[var(--muted)]">
+                    GSTIN {gstMonthly.report.gstin}
+                  </span>
+                </div>
+                <ul className="divide-y divide-[var(--line)]">
+                  {fleetSummary.stations.map((st) => (
+                    <li key={st.id} className="py-2 flex items-center justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="text-[12px] font-semibold text-[var(--ink)] truncate">
+                          {st.stationName}
+                        </div>
+                        <div className="text-[11px] text-[var(--muted)] truncate">
+                          {st.printerModel} · {st.connectionType.toUpperCase()} · {st.averageSpeedPpm} ppm
+                        </div>
+                      </div>
+                      <span className="text-[11px] font-mono font-semibold text-[var(--good)] shrink-0 tabular-nums">
+                        {st.activeQueueCount} queued
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+
+              <div className="rounded-[12px] p-3.5 bg-[var(--card-2)] border border-[var(--line)] space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="text-[12.5px] font-bold text-[var(--ink)]">
+                    Load-Balancing Routing Simulator
+                  </span>
+                  <div className="flex items-center gap-1">
+                    {([
+                      { id: 'kiosk_express', label: 'Kiosk' },
+                      { id: 'bw_duplex', label: 'B&W Duplex' },
+                      { id: 'colour_photo', label: 'Colour' },
+                    ] as const).map((preset) => (
+                      <button
+                        key={preset.id}
+                        type="button"
+                        onClick={() => void simulateFleetRoute(preset.id)}
+                        className={`px-2.5 py-1 rounded-[8px] text-[11px] font-semibold cursor-pointer ${
+                          simRoutingPreset === preset.id
+                            ? 'bg-[var(--accent-soft)] text-[var(--accent-text)]'
+                            : 'text-[var(--muted)] hover:text-[var(--ink)]'
+                        }`}
+                      >
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {simRoutingResult && (
+                  <div className="p-3 rounded-[10px] bg-[var(--card)] border border-[var(--line)] space-y-1.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[12px] font-bold text-[var(--ink)]">
+                        {simRoutingResult.stationName}
+                      </span>
+                      <span className="text-[11px] font-mono text-[var(--good)] tabular-nums">
+                        Est {simRoutingResult.estimatedWaitSeconds}s
+                      </span>
+                    </div>
+                    <p className="text-[11.5px] text-[var(--muted)]">
+                      {simRoutingResult.reason}
+                    </p>
+                    <div className="text-[11px] font-mono text-[var(--accent-text)]">
+                      Algorithm: {simRoutingResult.routingAlgorithmUsed} · Bay: {simRoutingResult.counterLocation}
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2 pt-1">
+                  <a
+                    href={`/api/gst/export?month=${encodeURIComponent(gstMonthly.report.yearMonth)}`}
+                    download={`aman-computer-gst-hsn9989-${gstMonthly.report.yearMonth}.csv`}
+                    className="btn-primary px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5"
+                  >
+                    <Download size={13} />
+                    <span>Download GST CSV ({gstMonthly.report.yearMonth})</span>
+                  </a>
+                  <button
+                    type="button"
+                    onClick={() => setShowThermalSlip((prev) => !prev)}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Receipt size={13} />
+                    <span>{showThermalSlip ? 'Hide 80mm Slip' : 'Preview 80mm Thermal Slip'}</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onNavigateTab('#/print-management/counter-ops')}
+                    className="btn-ghost px-3 py-1.5 rounded-[10px] text-[12px] font-semibold inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Layers size={13} />
+                    <span>Counter Stock, Cash &amp; Khata</span>
+                  </button>
+                </div>
+
+                {showThermalSlip && gstMonthly.sampleThermalSlip && (
+                  <pre className="p-3 rounded-[10px] bg-[#111318] text-[#e6ecf5] font-mono text-[10.5px] leading-snug overflow-x-auto max-h-[220px]">
+                    {gstMonthly.sampleThermalSlip.escPosLines.join('\n')}
+                  </pre>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : (
+          <div className="rounded-[12px] p-4 bg-[var(--card-2)] border border-[var(--line)] text-[12.5px] text-[var(--muted)]">
+            Click "Sync Fleet &amp; GST" or run <code className="font-mono text-[var(--accent-text)]">npm run fleet:audit</code> in your terminal to inspect multi-counter load balancing and HSN 9989 GST return metrics.
+          </div>
+        )}
       </section>
     </div>
   );

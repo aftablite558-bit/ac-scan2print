@@ -8,6 +8,14 @@
     ],
     "rewrites": [
       {
+        "source": "/quick-print",
+        "destination": "/quick-print/index.html"
+      },
+      {
+        "source": "/quick-print/**",
+        "destination": "/quick-print/index.html"
+      },
+      {
         "source": "**",
         "destination": "/index.html"
       }
@@ -35,7 +43,37 @@
         ]
       },
       {
+        "source": "/quick-print/index.html",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "no-cache, no-store, must-revalidate"
+          },
+          {
+            "key": "X-Content-Type-Options",
+            "value": "nosniff"
+          },
+          {
+            "key": "X-Frame-Options",
+            "value": "DENY"
+          },
+          {
+            "key": "Referrer-Policy",
+            "value": "no-referrer"
+          }
+        ]
+      },
+      {
         "source": "/assets/**",
+        "headers": [
+          {
+            "key": "Cache-Control",
+            "value": "public, max-age=31536000, immutable"
+          }
+        ]
+      },
+      {
+        "source": "/quick-print/assets/**",
         "headers": [
           {
             "key": "Cache-Control",

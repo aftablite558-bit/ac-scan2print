@@ -36,6 +36,7 @@ import {
   buildAdminQueueItems,
   computeAdminPilotSummary,
   computeAdminPrintDashboardMetrics,
+  computeDailyFinancialReconciliation,
   computeDeviceHeartbeatStatus,
   filterAndSortAdminJobs,
   isValidPortalUrl,
@@ -3305,7 +3306,23 @@ export async function handleAdminPrintJobs(
         .slice(0, 50)
         .map((j) => toAdminJobSummary(j));
 
+      const reconciliationDateRaw =
+        req.method === 'GET'
+          ? url.searchParams.get('reconciliationDate') ?? undefined
+          : typeof body.reconciliationDate === 'string'
+            ? body.reconciliationDate
+            : undefined;
+      const reconciliationDate =
+        reconciliationDateRaw && /^\d{4}-\d{2}-\d{2}$/.test(reconciliationDateRaw.trim())
+          ? reconciliationDateRaw.trim()
+          : nowIso.slice(0, 10);
+
       const metrics = computeAdminPrintDashboardMetrics(allJobs, allPayments, nowIso);
+      const dailyReconciliation = computeDailyFinancialReconciliation(
+        allJobs,
+        allPayments,
+        reconciliationDate
+      );
       const queue = buildAdminQueueItems(allJobs, printers, devices, nowIso);
       const publicDevices = devices.map((d) => ({
         ...toPublicDeviceSummary(d),
@@ -3362,6 +3379,7 @@ export async function handleAdminPrintJobs(
           jobs: pagedJobs,
           pagination: { page, pageSize, totalItems, totalPages },
           metrics,
+          dailyReconciliation,
           queue,
           paymentVerifications,
           cashPendingJobs,
@@ -3373,6 +3391,7 @@ export async function handleAdminPrintJobs(
           systemSettings,
           pilotSummary,
           recentPilotEvents,
+          recentEvents: recentEvents.slice(0, 80),
           cleanupLogs,
           serverNowIso: nowIso,
         },

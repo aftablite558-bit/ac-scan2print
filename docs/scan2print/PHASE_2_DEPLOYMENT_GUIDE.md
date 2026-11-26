@@ -79,3 +79,7 @@ Subsequent calls automatically return `409 SINGLE_ADMIN_ALREADY_EXISTS`.
 1. Configure real INR rates in `print_pricing_rules` (duplex MUST use `pricing_unit = 'per_physical_sheet'`).
 2. Upload shop UPI QR image and enable UPI handle via `admin-update-payment-settings`.
 3. Confirm final retention hours (`print_system_settings.retention_policy_confirmed = true`) before switching `cleanup-expired-print-files` from `dry_run` to scheduled `execute`.
+
+---
+
+> **Phase 13 Live Cutover Note:** For the complete updated production cutover sequence covering all **7 SQL migrations**, all **21 Edge Functions**, unified Firebase Hosting (`/` + `/quick-print`), and the Windows 11 Session-0 Print Agent installer, see [`PHASE_13_LIVE_CUTOVER_RUNBOOK.md`](./PHASE_13_LIVE_CUTOVER_RUNBOOK.md).

@@ -75,16 +75,40 @@ export const PrintHomePage: React.FC = () => {
           </div>
         )}
 
-        <div className="flex flex-col sm:flex-row gap-2.5">
+        <div className="flex flex-col sm:flex-row flex-wrap gap-2.5">
           <button
             type="button"
             disabled={intakePaused}
             onClick={() => navigate('/quick-print/upload')}
-            className="portal-btn-primary px-5 py-3 text-[15px] flex-1 inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+            className="portal-btn-primary px-5 py-3 text-[15px] flex-1 min-w-[200px] inline-flex items-center justify-center gap-2 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
           >
             <Upload size={18} aria-hidden="true" />
             <span>{intakePaused ? 'Uploads Temporarily Paused' : 'Upload Document'}</span>
             {!intakePaused && <ArrowRight size={16} aria-hidden="true" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate('/quick-print/photo-sheet')}
+            className="portal-btn-secondary px-4 py-3 text-[14px] inline-flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <span>Passport Photo Sheet</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate('/quick-print/exam-prep')}
+            className="portal-btn-secondary px-4 py-3 text-[14px] inline-flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <span>Exam KB Prep</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => navigate('/quick-print/batch-pack')}
+            className="portal-btn-secondary px-4 py-3 text-[14px] inline-flex items-center justify-center gap-2 cursor-pointer"
+          >
+            <span>Bulk Notes Pack</span>
           </button>
 
           <button

@@ -2,7 +2,9 @@
 
 import type {
   CustomerRoute,
+  FinishingServiceId,
   JobStatus,
+  PagesPerSheet,
   PaperSize,
   PaymentMethod,
   PaymentStatus,
@@ -27,9 +29,199 @@ export function parseCustomerRoute(pathname: string): CustomerRoute {
       return '/quick-print/track';
     case '/quick-print/help':
       return '/quick-print/help';
+    case '/quick-print/kiosk':
+      return '/quick-print/kiosk';
+    case '/quick-print/photo-sheet':
+      return '/quick-print/photo-sheet';
+    case '/quick-print/exam-prep':
+      return '/quick-print/exam-prep';
+    case '/quick-print/batch-pack':
+      return '/quick-print/batch-pack';
     default:
       return '/quick-print';
   }
+}
+
+export interface CustomerPhotoPresetSpec {
+  id: 'passport_4x6_8' | 'passport_a4_24' | 'passport_a4_35' | 'id_card_a4_duplex';
+  label: string;
+  shortDesc: string;
+  sheetWidthPx: number;
+  sheetHeightPx: number;
+  sheetWidthMm: number;
+  sheetHeightMm: number;
+  cols: number;
+  rows: number;
+  maxSlots: number;
+  tileWidthMm: number;
+  tileHeightMm: number;
+  gapMm: number;
+  suggestedPriceInr: number;
+  mode: 'passport_grid' | 'id_card_pair';
+}
+
+export const PHOTO_SHEET_CUSTOMER_PRESETS: readonly CustomerPhotoPresetSpec[] = [
+  {
+    id: 'passport_4x6_8',
+    label: '4×6 Glossy — 8 Passport Photos',
+    shortDesc: 'Standard 35×45 mm passport grid on 4×6 photo paper',
+    sheetWidthPx: 1800,
+    sheetHeightPx: 1200,
+    sheetWidthMm: 152.4,
+    sheetHeightMm: 101.6,
+    cols: 4,
+    rows: 2,
+    maxSlots: 8,
+    tileWidthMm: 35,
+    tileHeightMm: 45,
+    gapMm: 3,
+    suggestedPriceInr: 40,
+    mode: 'passport_grid',
+  },
+  {
+    id: 'passport_a4_24',
+    label: 'A4 Sheet — 24 Passport Photos',
+    shortDesc: 'Bulk 35×45 mm passport pack on A4 sheet',
+    sheetWidthPx: 2480,
+    sheetHeightPx: 3508,
+    sheetWidthMm: 210,
+    sheetHeightMm: 297,
+    cols: 4,
+    rows: 6,
+    maxSlots: 24,
+    tileWidthMm: 35,
+    tileHeightMm: 45,
+    gapMm: 3.5,
+    suggestedPriceInr: 90,
+    mode: 'passport_grid',
+  },
+  {
+    id: 'passport_a4_35',
+    label: 'A4 Stamp — 35 Mini Photos',
+    shortDesc: '30×35 mm school/exam form mini photos',
+    sheetWidthPx: 2480,
+    sheetHeightPx: 3508,
+    sheetWidthMm: 210,
+    sheetHeightMm: 297,
+    cols: 5,
+    rows: 7,
+    maxSlots: 35,
+    tileWidthMm: 30,
+    tileHeightMm: 35,
+    gapMm: 4,
+    suggestedPriceInr: 100,
+    mode: 'passport_grid',
+  },
+  {
+    id: 'id_card_a4_duplex',
+    label: 'A4 ID Card (Front + Back)',
+    shortDesc: 'Aadhaar / PAN / Voter ID CR80 size on one A4 page',
+    sheetWidthPx: 2480,
+    sheetHeightPx: 3508,
+    sheetWidthMm: 210,
+    sheetHeightMm: 297,
+    cols: 1,
+    rows: 2,
+    maxSlots: 2,
+    tileWidthMm: 85.6,
+    tileHeightMm: 54,
+    gapMm: 14,
+    suggestedPriceInr: 20,
+    mode: 'id_card_pair',
+  },
+] as const;
+
+export interface CustomerExamPresetSpec {
+  id: 'ssc_photo' | 'ssc_signature' | 'upsc_photo' | 'rrb_bpsc_photo' | 'pan_form_scan';
+  label: string;
+  shortDesc: string;
+  widthPx: number;
+  heightPx: number;
+  minKb: number;
+  maxKb: number;
+  defaultScanClean: boolean;
+}
+
+export const EXAM_FORM_CUSTOMER_PRESETS: readonly CustomerExamPresetSpec[] = [
+  {
+    id: 'ssc_photo',
+    label: 'SSC CGL / CHSL Photo',
+    shortDesc: '413×531 px · 20–50 KB JPEG',
+    widthPx: 413,
+    heightPx: 531,
+    minKb: 20,
+    maxKb: 50,
+    defaultScanClean: false,
+  },
+  {
+    id: 'ssc_signature',
+    label: 'SSC / RRB Signature',
+    shortDesc: '472×236 px · 10–20 KB Clean Ink',
+    widthPx: 472,
+    heightPx: 236,
+    minKb: 10,
+    maxKb: 20,
+    defaultScanClean: true,
+  },
+  {
+    id: 'upsc_photo',
+    label: 'UPSC CSE Portrait',
+    shortDesc: '550×700 px · 20–300 KB JPEG',
+    widthPx: 550,
+    heightPx: 700,
+    minKb: 20,
+    maxKb: 300,
+    defaultScanClean: false,
+  },
+  {
+    id: 'rrb_bpsc_photo',
+    label: 'BPSC / Police / RRB Photo',
+    shortDesc: '320×400 px · 20–50 KB JPEG',
+    widthPx: 320,
+    heightPx: 400,
+    minKb: 20,
+    maxKb: 50,
+    defaultScanClean: false,
+  },
+  {
+    id: 'pan_form_scan',
+    label: 'PAN / Document Scan Clean',
+    shortDesc: '1240×1754 px · 40–200 KB Crisp B&W',
+    widthPx: 1240,
+    heightPx: 1754,
+    minKb: 40,
+    maxKb: 200,
+    defaultScanClean: true,
+  },
+] as const;
+
+export interface FinishingAddonOption {
+  id: FinishingServiceId;
+  label: string;
+  shortDesc: string;
+  rateInr: number;
+}
+
+export const FINISHING_ADDONS: readonly FinishingAddonOption[] = [
+  { id: 'none', label: 'Standard Print Only', shortDesc: 'Loose printed pages', rateInr: 0 },
+  { id: 'staple_corner', label: 'Corner Stapling', shortDesc: 'Clean metal staple per copy', rateInr: 5 },
+  { id: 'spiral_binding', label: 'Spiral Binding', shortDesc: 'Clear front, card back & coil', rateInr: 30 },
+  { id: 'thermal_lamination', label: 'A4 Lamination', shortDesc: '125-micron waterproof seal', rateInr: 20 },
+  { id: 'heavy_cover_bind', label: 'Project Cover Bind', shortDesc: 'Card cover & spine tape', rateInr: 45 },
+] as const;
+
+export const NUP_LAYOUT_OPTIONS: ReadonlyArray<{
+  pagesPerSheet: PagesPerSheet;
+  label: string;
+  hint: string;
+}> = [
+  { pagesPerSheet: 1, label: '1-in-1 Normal', hint: 'Full page' },
+  { pagesPerSheet: 2, label: '2-in-1 Notes', hint: 'Save 50% sheets' },
+  { pagesPerSheet: 4, label: '4-in-1 Compact', hint: 'Save 75% sheets' },
+] as const;
+
+export function getFinishingAddon(id?: FinishingServiceId): FinishingAddonOption {
+  return FINISHING_ADDONS.find((f) => f.id === id) ?? FINISHING_ADDONS[0];
 }
 
 // Mirrors supabase/functions/_shared/pricing.ts calculatePhysicalSheets exactly
@@ -41,10 +233,15 @@ export function calculatePhysicalSheets(printedPages: number, printSides: PrintS
 export interface EstimateBreakdown {
   pricingConfigured: boolean;
   matchedRule: PricingRulePublic | null;
+  pagesPerSheet: PagesPerSheet;
+  impressionsPerCopy: number;
   printedPagesTotal: number;
   physicalSheetsTotal: number;
+  sheetsSavedByNup: number;
   unitCount: number;
   subtotal: number | null;
+  finishingAddon: FinishingAddonOption;
+  finishingAmount: number;
   finalEstimatedAmount: number | null;
   minimumApplied: boolean;
   isMockEstimate: boolean;
@@ -56,13 +253,25 @@ export function calculateEstimateBreakdown(input: {
   paperSize: PaperSize;
   printMode: PrintMode;
   printSides: PrintSides;
+  pagesPerSheet?: PagesPerSheet;
+  finishingService?: FinishingServiceId;
   rules: PricingRulePublic[];
 }): EstimateBreakdown {
   const safePages = Math.max(0, Math.floor(input.pagesPerCopy));
   const safeCopies = Math.max(1, Math.floor(input.copies));
-  const printedPagesTotal = safePages * safeCopies;
-  const physicalSheetsTotal =
-    calculatePhysicalSheets(safePages, input.printSides) * safeCopies;
+  const pagesPerSheet: PagesPerSheet =
+    input.pagesPerSheet === 2 || input.pagesPerSheet === 4 ? input.pagesPerSheet : 1;
+
+  const impressionsPerCopy = safePages > 0 ? Math.ceil(safePages / pagesPerSheet) : 0;
+  const printedPagesTotal = impressionsPerCopy * safeCopies;
+  const physicalSheetsPerCopy = calculatePhysicalSheets(impressionsPerCopy, input.printSides);
+  const physicalSheetsTotal = physicalSheetsPerCopy * safeCopies;
+
+  const baselineSheetsPerCopy = calculatePhysicalSheets(safePages, input.printSides);
+  const sheetsSavedByNup = Math.max(0, (baselineSheetsPerCopy - physicalSheetsPerCopy) * safeCopies);
+
+  const finishingAddon = getFinishingAddon(input.finishingService);
+  const finishingAmount = finishingAddon.rateInr * safeCopies;
 
   const matchedRule =
     input.rules.find(
@@ -76,13 +285,18 @@ export function calculateEstimateBreakdown(input: {
     return {
       pricingConfigured: Boolean(matchedRule),
       matchedRule,
+      pagesPerSheet,
+      impressionsPerCopy,
       printedPagesTotal,
       physicalSheetsTotal,
+      sheetsSavedByNup,
       unitCount:
         matchedRule?.pricingUnit === 'per_physical_sheet'
           ? physicalSheetsTotal
           : printedPagesTotal,
       subtotal: null,
+      finishingAddon,
+      finishingAmount,
       finalEstimatedAmount: null,
       minimumApplied: false,
       isMockEstimate: Boolean(matchedRule?.isMockSample),
@@ -94,18 +308,27 @@ export function calculateEstimateBreakdown(input: {
       ? physicalSheetsTotal
       : printedPagesTotal;
 
-  const rawSubtotal = Math.round(unitCount * matchedRule.rate * 100) / 100;
-  const minimumApplied = rawSubtotal > 0 && rawSubtotal < matchedRule.minimumCharge;
-  const finalEstimatedAmount = Math.max(rawSubtotal, matchedRule.minimumCharge);
+  const ratePaise = Math.round(matchedRule.rate * 100);
+  const minPaise = Math.round(matchedRule.minimumCharge * 100);
+  const rawPrintPaise = unitCount * ratePaise;
+  const minimumApplied = rawPrintPaise > 0 && rawPrintPaise < minPaise;
+  const printChargePaise = Math.max(rawPrintPaise, minPaise);
+  const finishingPaise = Math.round(finishingAmount * 100);
+  const totalPaise = printChargePaise + finishingPaise;
 
   return {
     pricingConfigured: true,
     matchedRule,
+    pagesPerSheet,
+    impressionsPerCopy,
     printedPagesTotal,
     physicalSheetsTotal,
+    sheetsSavedByNup,
     unitCount,
-    subtotal: rawSubtotal,
-    finalEstimatedAmount: Math.round(finalEstimatedAmount * 100) / 100,
+    subtotal: Number((rawPrintPaise / 100).toFixed(2)),
+    finishingAddon,
+    finishingAmount,
+    finalEstimatedAmount: Number((totalPaise / 100).toFixed(2)),
     minimumApplied,
     isMockEstimate: matchedRule.isMockSample,
   };

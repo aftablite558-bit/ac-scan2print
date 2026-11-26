@@ -703,3 +703,293 @@ export function computeAdminPilotSummary(input: {
   };
 }
 
+// ============================================================================
+// Phase 12 — Daily Financial Closeout & Formula-Safe CSV Ledger Exports
+// ============================================================================
+
+export interface DailyFinancialReconciliation {
+  dateIso: string;
+  submittedJobsCount: number;
+  completedJobsCount: number;
+  cancelledOrRejectedCount: number;
+  failedOrReviewCount: number;
+  completedPhysicalSheets: number;
+  bwJobsCount: number;
+  colourJobsCount: number;
+  duplexJobsCount: number;
+  singleJobsCount: number;
+  confirmedPaidCount: number;
+  confirmedTotalInr: number;
+  upiConfirmedCount: number;
+  upiConfirmedInr: number;
+  cashConfirmedCount: number;
+  cashConfirmedInr: number;
+  pendingVerificationCount: number;
+  pendingVerificationInr: number;
+  unpaidCounterExposureCount: number;
+  unpaidCounterExposureInr: number;
+  refundedCount: number;
+  refundedInr: number;
+}
+
+export function computeDailyFinancialReconciliation(
+  jobs: readonly PrintJob[],
+  payments: readonly PrintPayment[],
+  targetDateIso: string = new Date().toISOString().slice(0, 10)
+): DailyFinancialReconciliation {
+  const datePrefix = /^\d{4}-\d{2}-\d{2}$/.test(targetDateIso.trim())
+    ? targetDateIso.trim()
+    : new Date().toISOString().slice(0, 10);
+
+  let submittedJobsCount = 0;
+  let completedJobsCount = 0;
+  let cancelledOrRejectedCount = 0;
+  let failedOrReviewCount = 0;
+  let completedPhysicalSheets = 0;
+  let bwJobsCount = 0;
+  let colourJobsCount = 0;
+  let duplexJobsCount = 0;
+  let singleJobsCount = 0;
+  let unpaidCounterExposureCount = 0;
+  let unpaidCounterExposurePaise = 0;
+
+  for (const job of jobs) {
+    if (job.status === 'draft') continue;
+    const jobDate = (job.submitted_at ?? job.created_at).slice(0, 10);
+    const completedDate = (job.completed_at ?? job.updated_at).slice(0, 10);
+    const isJobDay = jobDate === datePrefix;
+    const isCompletedDay = job.status === 'completed' && completedDate === datePrefix;
+
+    if (isJobDay) {
+      submittedJobsCount += 1;
+      if (job.print_mode === 'colour') colourJobsCount += 1;
+      else bwJobsCount += 1;
+
+      if (job.print_sides === 'duplex') duplexJobsCount += 1;
+      else singleJobsCount += 1;
+
+      if (job.status === 'cancelled' || job.status === 'rejected' || job.status === 'expired') {
+        cancelledOrRejectedCount += 1;
+      } else if (job.status === 'failed' || job.status === 'needs_review') {
+        failedOrReviewCount += 1;
+      }
+
+      if (
+        job.payment_status === 'unpaid' &&
+        job.status !== 'cancelled' &&
+        job.status !== 'rejected' &&
+        job.status !== 'expired'
+      ) {
+        unpaidCounterExposureCount += 1;
+        const paise = Math.round(Number(job.final_amount ?? 0) * 100);
+        if (Number.isFinite(paise) && paise > 0) {
+          unpaidCounterExposurePaise += paise;
+        }
+      }
+    }
+
+    if (isCompletedDay) {
+      completedJobsCount += 1;
+      completedPhysicalSheets +=
+        Math.max(0, job.physical_sheet_count ?? 0) * Math.max(1, job.copies ?? 1);
+    }
+  }
+
+  let confirmedPaidCount = 0;
+  let confirmedTotalPaise = 0;
+  let upiConfirmedCount = 0;
+  let upiConfirmedPaise = 0;
+  let cashConfirmedCount = 0;
+  let cashConfirmedPaise = 0;
+  let pendingVerificationCount = 0;
+  let pendingVerificationPaise = 0;
+  let refundedCount = 0;
+  let refundedPaise = 0;
+
+  for (const payment of payments) {
+    const amountPaise = Math.round(Number(payment.amount ?? 0) * 100);
+    if (!Number.isFinite(amountPaise) || amountPaise < 0) continue;
+
+    if (payment.payment_status === 'paid') {
+      const paidDate = (payment.verified_at ?? payment.created_at).slice(0, 10);
+      if (paidDate !== datePrefix) continue;
+      confirmedPaidCount += 1;
+      confirmedTotalPaise += amountPaise;
+      if (payment.payment_method === 'upi') {
+        upiConfirmedCount += 1;
+        upiConfirmedPaise += amountPaise;
+      } else if (payment.payment_method === 'cash') {
+        cashConfirmedCount += 1;
+        cashConfirmedPaise += amountPaise;
+      }
+    } else if (payment.payment_status === 'pending_verification') {
+      const claimDate = (payment.submitted_at ?? payment.created_at).slice(0, 10);
+      if (claimDate !== datePrefix) continue;
+      pendingVerificationCount += 1;
+      pendingVerificationPaise += amountPaise;
+    } else if (payment.payment_status === 'refunded') {
+      const refDate = (payment.updated_at ?? payment.created_at).slice(0, 10);
+      if (refDate !== datePrefix) continue;
+      refundedCount += 1;
+      refundedPaise += amountPaise;
+    }
+  }
+
+  return {
+    dateIso: datePrefix,
+    submittedJobsCount,
+    completedJobsCount,
+    cancelledOrRejectedCount,
+    failedOrReviewCount,
+    completedPhysicalSheets,
+    bwJobsCount,
+    colourJobsCount,
+    duplexJobsCount,
+    singleJobsCount,
+    confirmedPaidCount,
+    confirmedTotalInr: roundInr(confirmedTotalPaise / 100),
+    upiConfirmedCount,
+    upiConfirmedInr: roundInr(upiConfirmedPaise / 100),
+    cashConfirmedCount,
+    cashConfirmedInr: roundInr(cashConfirmedPaise / 100),
+    pendingVerificationCount,
+    pendingVerificationInr: roundInr(pendingVerificationPaise / 100),
+    unpaidCounterExposureCount,
+    unpaidCounterExposureInr: roundInr(unpaidCounterExposurePaise / 100),
+    refundedCount,
+    refundedInr: roundInr(refundedPaise / 100),
+  };
+}
+
+const CSV_FORMULA_PREFIX_RE = /^[=+\-@\t\r]/;
+
+export function sanitizeCsvFormulaCell(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+  const text = String(raw);
+  if (CSV_FORMULA_PREFIX_RE.test(text) || CSV_FORMULA_PREFIX_RE.test(text.trimStart())) {
+    return `'${text}`;
+  }
+  return text;
+}
+
+export function escapeCsvCell(raw: unknown): string {
+  const safe = sanitizeCsvFormulaCell(raw);
+  if (/[",\r\n]/.test(safe)) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
+}
+
+export interface CsvExportJobRow {
+  job_number: string;
+  submitted_at: string | null;
+  created_at: string;
+  customer_name: string | null;
+  customer_phone?: string | null;
+  paper_size: string;
+  print_mode: string;
+  print_sides: string;
+  verified_page_count: number | null;
+  copies: number;
+  physical_sheet_count: number | null;
+  status: string;
+  payment_method: string | null;
+  payment_status: string;
+  final_amount: number | null;
+  latest_transaction_reference?: string | null;
+}
+
+export function buildJobsLedgerCsv(
+  jobs: readonly CsvExportJobRow[],
+  txnRefByJobId: ReadonlyMap<string, string | null> = new Map()
+): string {
+  const headers = [
+    'Job Number',
+    'Timestamp',
+    'Customer Name',
+    'Customer Phone',
+    'Paper Size',
+    'Print Mode',
+    'Sides',
+    'Verified Pages',
+    'Copies',
+    'Physical Sheets',
+    'Workflow Status',
+    'Payment Method',
+    'Payment Status',
+    'Final Amount (INR)',
+    'UTR / Reference',
+  ];
+  const lines: string[] = [headers.map((h) => escapeCsvCell(h)).join(',')];
+
+  for (const job of jobs) {
+    const sheets =
+      job.physical_sheet_count !== null && job.physical_sheet_count !== undefined
+        ? Math.max(0, job.physical_sheet_count) * Math.max(1, job.copies ?? 1)
+        : '';
+    const ref =
+      job.latest_transaction_reference ??
+      ('id' in job && typeof (job as { id?: unknown }).id === 'string'
+        ? txnRefByJobId.get((job as { id: string }).id) ?? ''
+        : '');
+    lines.push(
+      [
+        job.job_number,
+        job.submitted_at ?? job.created_at,
+        job.customer_name ?? 'Walk-in Customer',
+        job.customer_phone ?? '',
+        job.paper_size,
+        job.print_mode === 'colour' ? 'Colour' : 'B&W',
+        job.print_sides === 'duplex' ? 'Duplex' : 'Single',
+        job.verified_page_count ?? '',
+        job.copies,
+        sheets,
+        job.status,
+        job.payment_method ?? '',
+        job.payment_status,
+        job.final_amount !== null && job.final_amount !== undefined
+          ? Number(job.final_amount).toFixed(2)
+          : '',
+        ref ?? '',
+      ]
+        .map((c) => escapeCsvCell(c))
+        .join(',')
+    );
+  }
+  return lines.join('\r\n');
+}
+
+export function buildAuditEventsCsv(events: readonly PrintEvent[]): string {
+  const headers = [
+    'Event ID',
+    'Timestamp',
+    'Actor Type',
+    'Actor ID',
+    'Event Type',
+    'Job ID',
+    'Previous Status',
+    'New Status',
+    'Metadata',
+  ];
+  const lines: string[] = [headers.map((h) => escapeCsvCell(h)).join(',')];
+  for (const ev of events) {
+    lines.push(
+      [
+        ev.id,
+        ev.created_at,
+        ev.actor_type,
+        ev.actor_id ?? '',
+        ev.event_type,
+        ev.job_id ?? '',
+        ev.previous_status ?? '',
+        ev.new_status ?? '',
+        JSON.stringify(ev.metadata ?? {}),
+      ]
+        .map((c) => escapeCsvCell(c))
+        .join(',')
+    );
+  }
+  return lines.join('\r\n');
+}
+
+

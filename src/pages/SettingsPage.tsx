@@ -1,9 +1,36 @@
-import React, { useEffect, useRef } from 'react';
-import { BellRing, Download, ShieldCheck } from 'lucide-react';
+import React, { useEffect, useRef, useState } from 'react';
+import { BellRing, Database, Download, ShieldCheck } from 'lucide-react';
 import { TabsNav } from '../components/AnimatedControls';
 import { useAdmin } from '../context/AdminContext';
 import type { WallpaperId } from '../types/admin';
 import { floatGain, popBadges, popIcon, revealCards, revealText } from '../utils/animations';
+import {
+  triggerTextDownload,
+  type AdminCleanupLog,
+  type AdminDeviceSummary,
+  type AdminPrintDashboardMetrics,
+  type AdminPrintEvent,
+  type AdminPrintJobSummary,
+  type AdminPrintPaymentSettings,
+  type AdminPrintPricingRule,
+  type AdminPrinterSummary,
+  type AdminSystemSettings,
+  type DailyFinancialReconciliation,
+} from '../utils/printManagement';
+
+interface Scan2PrintSnapshotPayload {
+  jobs?: AdminPrintJobSummary[];
+  metrics?: AdminPrintDashboardMetrics;
+  dailyReconciliation?: DailyFinancialReconciliation;
+  printers?: AdminPrinterSummary[];
+  devices?: AdminDeviceSummary[];
+  pricingRules?: AdminPrintPricingRule[];
+  paymentSettings?: AdminPrintPaymentSettings;
+  systemSettings?: AdminSystemSettings;
+  recentEvents?: AdminPrintEvent[];
+  cleanupLogs?: AdminCleanupLog[];
+  serverNowIso?: string;
+}
 
 export const SettingsPage: React.FC = () => {
   const {
@@ -17,6 +44,7 @@ export const SettingsPage: React.FC = () => {
     updateAppearance,
     registerFcm,
     exportDatabaseJson,
+    invokeAdminEdgeFunction,
     showToast,
   } = useAdmin();
 
@@ -26,9 +54,31 @@ export const SettingsPage: React.FC = () => {
   const rootRef = useRef<HTMLDivElement>(null);
   const h1Ref = useRef<HTMLHeadingElement>(null);
 
+  const [scanSnapshot, setScanSnapshot] = useState<Scan2PrintSnapshotPayload | null>(null);
+  const [exportingScanJson, setExportingScanJson] = useState(false);
+
   useEffect(() => {
     if (h1Ref.current) revealText(h1Ref.current, 0.04);
   }, []);
+
+  useEffect(() => {
+    if (activeTab !== 'data' || !integrations.supabaseConfigured) return;
+    let active = true;
+    void invokeAdminEdgeFunction<Scan2PrintSnapshotPayload>('admin-print-jobs', {
+      action: 'list',
+      page: 1,
+      pageSize: 15,
+    })
+      .then((res) => {
+        if (active) setScanSnapshot(res);
+      })
+      .catch(() => {
+        // Silent in case Firebase session/Supabase config isn't active yet
+      });
+    return () => {
+      active = false;
+    };
+  }, [activeTab, integrations.supabaseConfigured, invokeAdminEdgeFunction]);
 
   useEffect(() => {
     if (!rootRef.current) return;
@@ -46,6 +96,46 @@ export const SettingsPage: React.FC = () => {
   }, [activeTab]);
 
   const canReadAudit = can('audit.read');
+
+  const handleExportScan2PrintSnapshot = async () => {
+    if (exportingScanJson) return;
+    setExportingScanJson(true);
+    try {
+      const res = await invokeAdminEdgeFunction<Scan2PrintSnapshotPayload>('admin-print-jobs', {
+        action: 'list',
+        page: 1,
+        pageSize: 100,
+      });
+      const safeSnapshot = {
+        exportedAt: new Date().toISOString(),
+        serverNowIso: res.serverNowIso ?? null,
+        metrics: res.metrics ?? null,
+        dailyReconciliation: res.dailyReconciliation ?? null,
+        systemSettings: res.systemSettings ?? null,
+        paymentSettings: res.paymentSettings ?? null,
+        pricingRules: res.pricingRules ?? [],
+        printers: res.printers ?? [],
+        devices: res.devices ?? [],
+        recentJobs: res.jobs ?? [],
+        cleanupLogs: res.cleanupLogs ?? [],
+        recentEvents: res.recentEvents ?? [],
+      };
+      triggerTextDownload(
+        `aman-scan2print-snapshot-${new Date().toISOString().slice(0, 10)}.json`,
+        JSON.stringify(safeSnapshot, null, 2),
+        'application/json'
+      );
+      setScanSnapshot(res);
+      showToast('Scan2Print operational JSON snapshot exported.', 'good');
+    } catch (err) {
+      showToast(
+        err instanceof Error ? err.message : 'Unable to export Scan2Print snapshot.',
+        'bad'
+      );
+    } finally {
+      setExportingScanJson(false);
+    }
+  };
 
   return (
     <div ref={rootRef} className="space-y-5">
@@ -276,59 +366,113 @@ export const SettingsPage: React.FC = () => {
 
       {/* Data Backup Tab */}
       {activeTab === 'data' && (
-        <section className="anim-card glass-pane rounded-[24px] p-5 sm:p-6 max-w-[820px] space-y-6">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <h2 className="text-[17px] font-bold">Database Snapshot & Export</h2>
-              <p className="text-[12.5px] text-[var(--muted)]">
-                Live record counts stored on your backend relational database
-              </p>
+        <div className="space-y-4 max-w-[820px]">
+          <section className="anim-card glass-pane rounded-[24px] p-5 sm:p-6 space-y-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-bold">Scan2Print Live Cloud Snapshot</h2>
+                <p className="text-[12.5px] text-[var(--muted)]">
+                  Authoritative Supabase print jobs, pricing rules, counter printers, enrolled PCs, and audit logs
+                </p>
+              </div>
+              <Database size={18} className="text-[#25C7D9]" />
             </div>
-            <ShieldCheck size={18} className="text-[var(--good)]" />
-          </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-            {[
-              { count: metrics.totalServices, label: 'Services' },
-              { count: metrics.galleryImages, label: 'Gallery Photos' },
-              { count: metrics.totalEnquiries, label: 'Enquiries' },
-              { count: metrics.publishedGovtUpdates + metrics.pendingGovtUpdates, label: 'Bihar Updates' },
-            ].map((item) => (
-              <div
-                key={item.label}
-                className="data-tile rounded-[16px] bg-[var(--card-2)] border border-[var(--line)] p-3.5 text-center"
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { count: scanSnapshot?.metrics?.totalJobs ?? 0, label: 'Print Jobs' },
+                { count: scanSnapshot?.pricingRules?.length ?? 0, label: 'Pricing Rules' },
+                { count: scanSnapshot?.printers?.length ?? 0, label: 'Printers' },
+                { count: scanSnapshot?.recentEvents?.length ?? 0, label: 'Audit Events' },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  className="data-tile rounded-[16px] bg-[var(--card-2)] border border-[var(--line)] p-3.5 text-center"
+                >
+                  <div className="text-[22px] font-bold tabular-nums">{item.count}</div>
+                  <div className="text-[12px] text-[var(--muted)] mt-0.5">{item.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-4 border-t border-[var(--line)] flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="font-semibold text-[14px]">Export Scan2Print operational JSON</div>
+                <div className="text-[12.5px] text-[var(--muted)]">
+                  Downloads sanitized Scan2Print settings, pricing rules, printers, devices, recent jobs, and audit logs (zero secret credentials).
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={!canReadAudit || exportingScanJson || !integrations.supabaseConfigured}
+                onClick={(e) => {
+                  popIcon(e.currentTarget);
+                  floatGain(e.currentTarget, '.json', 'good');
+                  void handleExportScan2PrintSnapshot();
+                }}
+                className="btn-primary px-4 py-2 rounded-full text-[13px] font-medium inline-flex items-center gap-2 disabled:opacity-45 cursor-pointer"
               >
-                <div className="text-[22px] font-bold tabular-nums">{item.count}</div>
-                <div className="text-[12px] text-[var(--muted)] mt-0.5">{item.label}</div>
-              </div>
-            ))}
-          </div>
-
-          <div className="pt-4 border-t border-[var(--line)] flex items-center justify-between gap-4">
-            <div>
-              <div className="font-semibold text-[14px]">Export complete database JSON</div>
-              <div className="text-[12.5px] text-[var(--muted)]">
-                Downloads Business Profile, Hero, Owner, Services, Gallery, Testimonials, FAQs, and Bihar Updates.
-              </div>
+                <Download size={14} />
+                <span>{exportingScanJson ? 'Exporting...' : 'Export Scan2Print JSON'}</span>
+              </button>
             </div>
-            <button
-              type="button"
-              disabled={!canReadAudit}
-              onClick={(e) => {
-                popIcon(e.currentTarget);
-                floatGain(e.currentTarget, '.json', 'good');
-                void exportDatabaseJson().catch((err) =>
-                  showToast(err instanceof Error ? err.message : 'Export failed', 'bad')
-                );
-              }}
-              className="btn-primary px-4 py-2 rounded-full text-[13px] font-medium inline-flex items-center gap-2 disabled:opacity-45 cursor-pointer"
-            >
-              <Download size={14} />
-              <span>Export JSON</span>
-            </button>
-          </div>
-        </section>
+          </section>
+
+          <section className="anim-card glass-pane rounded-[24px] p-5 sm:p-6 space-y-6">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-[17px] font-bold">CMS Workspace Database Export</h2>
+                <p className="text-[12.5px] text-[var(--muted)]">
+                  Live record counts stored on the Express CMS SQLite database
+                </p>
+              </div>
+              <ShieldCheck size={18} className="text-[var(--good)]" />
+            </div>
+
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {[
+                { count: metrics.totalServices, label: 'Services' },
+                { count: metrics.galleryImages, label: 'Gallery Photos' },
+                { count: metrics.totalEnquiries, label: 'Enquiries' },
+                { count: metrics.publishedGovtUpdates + metrics.pendingGovtUpdates, label: 'Bihar Updates' },
+              ].map((item) => (
+                <div
+                  key={item.label}
+                  className="data-tile rounded-[16px] bg-[var(--card-2)] border border-[var(--line)] p-3.5 text-center"
+                >
+                  <div className="text-[22px] font-bold tabular-nums">{item.count}</div>
+                  <div className="text-[12px] text-[var(--muted)] mt-0.5">{item.label}</div>
+                </div>
+              ))}
+            </div>
+
+            <div className="pt-4 border-t border-[var(--line)] flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <div className="font-semibold text-[14px]">Export CMS workspace JSON</div>
+                <div className="text-[12.5px] text-[var(--muted)]">
+                  Downloads Business Profile, Hero, Owner, Services, Gallery, Testimonials, FAQs, and Bihar Updates (requires local Express server).
+                </div>
+              </div>
+              <button
+                type="button"
+                disabled={!canReadAudit}
+                onClick={(e) => {
+                  popIcon(e.currentTarget);
+                  floatGain(e.currentTarget, '.json', 'good');
+                  void exportDatabaseJson().catch((err) =>
+                    showToast(err instanceof Error ? err.message : 'CMS export unavailable on static hosting', 'bad')
+                  );
+                }}
+                className="btn-ghost px-4 py-2 rounded-full text-[13px] font-medium inline-flex items-center gap-2 disabled:opacity-45 cursor-pointer"
+              >
+                <Download size={14} />
+                <span>Export CMS JSON</span>
+              </button>
+            </div>
+          </section>
+        </div>
       )}
     </div>
   );
 };
+

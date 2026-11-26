@@ -2,7 +2,9 @@
 
 import type {
   CustomerJobStatusResponse,
+  FinishingServiceId,
   Orientation,
+  PagesPerSheet,
   PaperSize,
   PaymentMethod,
   PortalCapabilities,
@@ -19,6 +21,8 @@ export interface CreateDraftJobRequest {
   copies: number;
   orientation: Orientation;
   scaling: ScalingMode;
+  pagesPerSheet?: PagesPerSheet;
+  finishingService?: FinishingServiceId;
   requestedPageRange: string;
   customerName?: string;
   customerPhone?: string;
@@ -66,6 +70,8 @@ export interface FinalizePrintUploadRequest {
   copies?: number;
   orientation?: Orientation;
   scaling?: ScalingMode;
+  pagesPerSheet?: PagesPerSheet;
+  finishingService?: FinishingServiceId;
   requestedPageRange?: string;
   customerName?: string;
   customerPhone?: string;

@@ -24,6 +24,23 @@ import type {
   SubmitPaymentResponse,
 } from './CustomerPortalAdapter';
 
+function resolveCustomerEdgeEndpoint(baseUrl: string, fnName: string): string {
+  if (typeof window !== 'undefined') {
+    const host = window.location.hostname;
+    const isExpressPreviewOrigin =
+      host === 'localhost' ||
+      host === '127.0.0.1' ||
+      host === '0.0.0.0' ||
+      host.endsWith('.run.app') ||
+      host.endsWith('.googleusercontent.com') ||
+      host.endsWith('.scf.usercontent.goog');
+    if (isExpressPreviewOrigin) {
+      return `/api/edge-proxy/${fnName}`;
+    }
+  }
+  return `${baseUrl}/functions/v1/${fnName}`;
+}
+
 export class SupabaseCustomerPortalAdapter implements CustomerPortalApiAdapter {
   public readonly isMockMode = false;
   private readonly baseUrl: string;
@@ -42,7 +59,7 @@ export class SupabaseCustomerPortalAdapter implements CustomerPortalApiAdapter {
     fnName: string,
     opts: { method?: 'GET' | 'POST'; body?: unknown; headers?: Record<string, string> } = {}
   ): Promise<T> {
-    const res = await fetch(`${this.baseUrl}/functions/v1/${fnName}`, {
+    const res = await fetch(resolveCustomerEdgeEndpoint(this.baseUrl, fnName), {
       method: opts.method ?? 'POST',
       headers: {
         apikey: this.anonKey,
@@ -205,6 +222,8 @@ export class SupabaseCustomerPortalAdapter implements CustomerPortalApiAdapter {
     if (req.copies !== undefined) body.copies = req.copies;
     if (req.orientation !== undefined) body.orientation = req.orientation;
     if (req.scaling !== undefined) body.scaling = req.scaling;
+    if (req.pagesPerSheet !== undefined) body.pagesPerSheet = req.pagesPerSheet;
+    if (req.finishingService !== undefined) body.finishingService = req.finishingService;
     if (req.requestedPageRange !== undefined) body.requestedPageRange = req.requestedPageRange;
     if (req.customerName !== undefined) body.customerName = req.customerName;
     if (req.customerPhone !== undefined) body.customerPhone = req.customerPhone;

@@ -588,3 +588,142 @@ export function validatePricingRuleDraft(draft: PricingRuleFormDraft): string | 
   }
   return null;
 }
+
+export interface DailyFinancialReconciliation {
+  dateIso: string;
+  submittedJobsCount: number;
+  completedJobsCount: number;
+  cancelledOrRejectedCount: number;
+  failedOrReviewCount: number;
+  completedPhysicalSheets: number;
+  bwJobsCount: number;
+  colourJobsCount: number;
+  duplexJobsCount: number;
+  singleJobsCount: number;
+  confirmedPaidCount: number;
+  confirmedTotalInr: number;
+  upiConfirmedCount: number;
+  upiConfirmedInr: number;
+  cashConfirmedCount: number;
+  cashConfirmedInr: number;
+  pendingVerificationCount: number;
+  pendingVerificationInr: number;
+  unpaidCounterExposureCount: number;
+  unpaidCounterExposureInr: number;
+  refundedCount: number;
+  refundedInr: number;
+}
+
+const CSV_FORMULA_PREFIX_RE = /^[=+\-@\t\r]/;
+
+export function sanitizeCsvFormulaCell(raw: unknown): string {
+  if (raw === null || raw === undefined) return '';
+  const text = String(raw);
+  if (CSV_FORMULA_PREFIX_RE.test(text) || CSV_FORMULA_PREFIX_RE.test(text.trimStart())) {
+    return `'${text}`;
+  }
+  return text;
+}
+
+export function escapeCsvCell(raw: unknown): string {
+  const safe = sanitizeCsvFormulaCell(raw);
+  if (/[",\r\n]/.test(safe)) {
+    return `"${safe.replace(/"/g, '""')}"`;
+  }
+  return safe;
+}
+
+export function buildJobsLedgerCsv(jobs: readonly AdminPrintJobSummary[]): string {
+  const headers = [
+    'Job Number',
+    'Timestamp',
+    'Customer Name',
+    'Customer Phone',
+    'Paper Size',
+    'Print Mode',
+    'Sides',
+    'Verified Pages',
+    'Copies',
+    'Physical Sheets',
+    'Workflow Status',
+    'Payment Method',
+    'Payment Status',
+    'Final Amount (INR)',
+    'UTR / Reference',
+  ];
+  const lines: string[] = [headers.map((h) => escapeCsvCell(h)).join(',')];
+  for (const job of jobs) {
+    const sheets =
+      job.physical_sheet_count !== null && job.physical_sheet_count !== undefined
+        ? Math.max(0, job.physical_sheet_count) * Math.max(1, job.copies ?? 1)
+        : '';
+    lines.push(
+      [
+        job.job_number,
+        job.submitted_at ?? job.created_at,
+        job.customer_name ?? 'Walk-in Customer',
+        job.customer_phone ?? '',
+        job.paper_size,
+        job.print_mode === 'colour' ? 'Colour' : 'B&W',
+        job.print_sides === 'duplex' ? 'Duplex' : 'Single',
+        job.verified_page_count ?? '',
+        job.copies,
+        sheets,
+        job.status,
+        job.payment_method ?? '',
+        job.payment_status,
+        job.final_amount !== null && job.final_amount !== undefined
+          ? Number(job.final_amount).toFixed(2)
+          : '',
+        job.latest_transaction_reference ?? '',
+      ]
+        .map((c) => escapeCsvCell(c))
+        .join(',')
+    );
+  }
+  return lines.join('\r\n');
+}
+
+export function buildAuditEventsCsv(events: readonly AdminPrintEvent[]): string {
+  const headers = [
+    'Event ID',
+    'Timestamp',
+    'Actor Type',
+    'Actor ID',
+    'Event Type',
+    'Job ID',
+    'Previous Status',
+    'New Status',
+    'Metadata',
+  ];
+  const lines: string[] = [headers.map((h) => escapeCsvCell(h)).join(',')];
+  for (const ev of events) {
+    lines.push(
+      [
+        ev.id,
+        ev.created_at,
+        ev.actor_type,
+        ev.actor_id ?? '',
+        ev.event_type,
+        ev.job_id ?? '',
+        ev.previous_status ?? '',
+        ev.new_status ?? '',
+        JSON.stringify(ev.metadata ?? {}),
+      ]
+        .map((c) => escapeCsvCell(c))
+        .join(',')
+    );
+  }
+  return lines.join('\r\n');
+}
+
+export function triggerTextDownload(filename: string, content: string, mimeType: string): void {
+  const blob = new Blob([content], { type: mimeType });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
